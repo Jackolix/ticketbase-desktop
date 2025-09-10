@@ -5,7 +5,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useAuth } from '@/contexts/AuthContext';
 import { useTickets } from '@/contexts/TicketsContext';
 import { apiClient } from '@/lib/api';
 import { Ticket } from '@/types/api';
@@ -29,7 +28,6 @@ interface TicketListProps {
 }
 
 export function TicketList({ onTicketSelect }: TicketListProps) {
-  const { user } = useAuth();
   const { tickets, isLoading, isRefreshing, refreshTickets, lastUpdated } = useTickets();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -43,8 +41,8 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     setIsSearchingTicket(true);
     try {
       const response = await apiClient.getTicketById(ticketId);
-      if (response.result === 'success' && response.tickets) {
-        const rawTicket = response.tickets;
+      if (response.result === 'success' && response.data?.tickets) {
+        const rawTicket = response.data.tickets;
         
         const transformedTicket: Ticket = {
           id: rawTicket.id,

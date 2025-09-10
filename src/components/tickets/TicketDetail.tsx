@@ -164,7 +164,7 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
         if (typeof templateData === 'object' && templateData !== null) {
           // For detail view, show template data in a more structured way
           return Object.entries(templateData)
-            .filter(([key, value]) => value && typeof value === 'string' && value.trim())
+            .filter(([, value]) => value && typeof value === 'string' && value.trim())
             .map(([key, value]) => `${key}: ${value}`)
             .join('\n') || 'Custom template data';
         }
