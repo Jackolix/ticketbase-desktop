@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import "./App.css";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -10,6 +10,7 @@ import { TicketList } from "./components/tickets/TicketList";
 import { TicketDetail } from "./components/tickets/TicketDetail";
 import { NewTicketForm } from "./components/tickets/NewTicketForm";
 import { Settings } from "./components/settings/Settings";
+import { TicketWindow } from "./components/tickets/TicketWindow";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { 
@@ -19,33 +20,127 @@ import {
   BreadcrumbPage,
 } from "@/components/ui/breadcrumb";
 import { Ticket } from "./types/api";
+import { apiClient } from "./lib/api";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
   const [currentView, setCurrentView] = useState("dashboard");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [isLoadingTicket, setIsLoadingTicket] = useState(false);
+
+  // Check URL for ticket routing on mount
+  useEffect(() => {
+    const checkUrlForTicket = () => {
+      const hash = window.location.hash;
+      const ticketMatch = hash.match(/^#\/ticket\/(\d+)$/);
+      
+      if (ticketMatch) {
+        const ticketId = parseInt(ticketMatch[1], 10);
+        loadTicketById(ticketId);
+        return;
+      }
+      
+      // Default to dashboard if no specific route
+      setCurrentView("dashboard");
+      setSelectedTicket(null);
+    };
+
+    if (isAuthenticated) {
+      checkUrlForTicket();
+    }
+  }, [isAuthenticated]);
+
+  const loadTicketById = async (ticketId: number) => {
+    setIsLoadingTicket(true);
+    try {
+      const response = await apiClient.getTicketById(ticketId);
+      if (response.result === 'success' && response.tickets) {
+        const rawTicket = response.tickets;
+        
+        const transformedTicket: Ticket = {
+          id: rawTicket.id,
+          description: rawTicket.description || '',
+          status: rawTicket.status?.name || '',
+          status_id: rawTicket.status_id || 0,
+          summary: rawTicket.summary || '',
+          ticketCreator: rawTicket.userone?.name || '',
+          ticketUser: rawTicket.ticketuser?.name || '',
+          ticketUserPhone: rawTicket.ticketuser?.phone || '',
+          ticketTerminatedUser: '',
+          attachments: [],
+          subject: rawTicket.servicedetail?.name || '',
+          priority: rawTicket.priority || '',
+          index: rawTicket.priority_index || 0,
+          my_ticket_id: rawTicket.my_ticket_id || 0,
+          location_id: rawTicket.location_id || 0,
+          company: {
+            id: rawTicket.companyone?.id || 0,
+            name: rawTicket.companyone?.name || '',
+            number: rawTicket.companyone?.number || '',
+            companyMail: rawTicket.companyone?.email || '',
+            companyPhone: rawTicket.companyone?.phone || '',
+            companyZip: rawTicket.companyone?.zip || '',
+            companyAdress: rawTicket.companyone?.address || '',
+          },
+          dyn_template_id: rawTicket.dyn_template_id || 0,
+          created_at: rawTicket.created_at || '',
+          ticket_start: '',
+          ticketMessagesCount: 0,
+          template_data: rawTicket.template_data || '',
+          pool_name: '',
+        };
+        
+        setSelectedTicket(transformedTicket);
+        setCurrentView("ticket-detail");
+      } else {
+        console.error('Failed to load ticket:', response);
+        // Fallback to dashboard if ticket not found
+        setCurrentView("dashboard");
+        setSelectedTicket(null);
+      }
+    } catch (error) {
+      console.error('Failed to load ticket by ID:', error);
+      // Fallback to dashboard if error
+      setCurrentView("dashboard");
+      setSelectedTicket(null);
+    } finally {
+      setIsLoadingTicket(false);
+    }
+  };
 
   const handleViewChange = (view: string) => {
     setCurrentView(view);
     setSelectedTicket(null);
+    // Clear URL hash when navigating away from ticket
+    if (window.location.hash.startsWith('#/ticket/')) {
+      window.location.hash = '';
+    }
   };
 
   const handleTicketSelect = (ticket: Ticket) => {
     setSelectedTicket(ticket);
+    setCurrentView("ticket-detail");
   };
 
   const handleTicketBack = () => {
     setSelectedTicket(null);
+    setCurrentView("tickets");
+    // Clear URL hash when going back
+    if (window.location.hash.startsWith('#/ticket/')) {
+      window.location.hash = '';
+    }
   };
 
-  if (isLoading) {
+  if (isLoading || isLoadingTicket) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center space-y-4">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center mx-auto animate-pulse">
             <div className="w-4 h-4 bg-primary-foreground rounded" />
           </div>
-          <p className="text-muted-foreground">Loading...</p>
+          <p className="text-muted-foreground">
+            {isLoadingTicket ? "Loading ticket..." : "Loading..."}
+          </p>
         </div>
       </div>
     );
@@ -70,8 +165,14 @@ function AppContent() {
   };
 
   const renderContent = () => {
-    if (selectedTicket) {
-      return <TicketDetail ticket={selectedTicket} onBack={handleTicketBack} />;
+    if (selectedTicket || currentView === "ticket-detail") {
+      return selectedTicket ? (
+        <TicketDetail ticket={selectedTicket} onBack={handleTicketBack} />
+      ) : (
+        <div className="flex items-center justify-center h-64">
+          <p className="text-muted-foreground">Ticket not found</p>
+        </div>
+      );
     }
 
     switch (currentView) {
@@ -118,6 +219,26 @@ function AppContent() {
 }
 
 function App() {
+  // Check if this is a ticket window (has ticketWindow=true query parameter)
+  const isTicketWindow = new URLSearchParams(window.location.search).get('ticketWindow') === 'true';
+  
+  // Get ticket ID from URL hash
+  const hash = window.location.hash;
+  const ticketMatch = hash.match(/^#\/ticket\/(\d+)$/);
+  const ticketId = ticketMatch ? ticketMatch[1] : null;
+  
+  if (isTicketWindow && ticketId) {
+    return (
+      <ThemeProvider>
+        <AuthProvider>
+          <TicketsProvider>
+            <TicketWindow ticketId={ticketId} />
+          </TicketsProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    );
+  }
+
   return (
     <ThemeProvider>
       <AuthProvider>

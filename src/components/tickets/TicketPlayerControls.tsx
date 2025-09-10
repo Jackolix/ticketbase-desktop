@@ -30,21 +30,32 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [stopMessage, setStopMessage] = useState('');
-  const [stopStatus, setStopStatus] = useState('4'); // Default to "Closed"
+  const [stopStatus, setStopStatus] = useState('4'); // Default to "Abgeschlossen"
 
   useEffect(() => {
     fetchPlayerStatus();
-    let interval: NodeJS.Timeout;
+    let timerInterval: NodeJS.Timeout;
+    let statusInterval: NodeJS.Timeout;
 
+    // Update elapsed time every second when playing (only when we have a startTime)
     if (playerStatus === 'playing' && startTime) {
-      interval = setInterval(() => {
+      timerInterval = setInterval(() => {
         setElapsedTime(Date.now() - startTime.getTime());
       }, 1000);
     }
+    // When paused, don't update elapsed time - it should stay at the current value
+
+    // Poll player status every 30 seconds to detect external changes
+    statusInterval = setInterval(() => {
+      fetchPlayerStatus();
+    }, 30000);
 
     return () => {
-      if (interval) {
-        clearInterval(interval);
+      if (timerInterval) {
+        clearInterval(timerInterval);
+      }
+      if (statusInterval) {
+        clearInterval(statusInterval);
       }
     };
   }, [playerStatus, startTime, ticket.id, user?.id]);
@@ -55,10 +66,65 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
     try {
       const response = await apiClient.getPlayerStatus(ticket.id, user.id);
       if (response.status === 'success') {
-        setPlayerStatus(response.data?.play_status || 'stopped');
+        // Fix: The API returns playerStatus directly, not nested under data
+        const playerStatusData = response.playerStatus;
+        if (playerStatusData) {
+          const newStatus = getPlayerStatusString(playerStatusData.play_status);
+          setPlayerStatus(newStatus);
+          
+          // Set elapsed time from API response (total_time is in minutes, convert to milliseconds)
+          const totalTimeMs = (playerStatusData.total_time || 0) * 60 * 1000;
+          setElapsedTime(totalTimeMs);
+          
+          // If the timer is running, set start time based on elapsed time
+          if (newStatus === 'playing') {
+            setStartTime(new Date(Date.now() - totalTimeMs));
+          } else if (newStatus === 'paused') {
+            // For paused state, we keep the elapsed time but no active start time
+            setStartTime(null);
+          } else if (newStatus === 'stopped') {
+            setStartTime(null);
+          }
+        } else {
+          setPlayerStatus('stopped');
+          setElapsedTime(0);
+          setStartTime(null);
+        }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to fetch player status:', error);
+      
+      // Handle rate limiting gracefully
+      if (error.message?.includes('429') || error.message?.includes('Too Many Requests')) {
+        console.warn('Rate limited - will retry on next interval');
+        return; // Don't reset status on rate limit, keep current state
+      }
+      
+      // Only reset status on actual errors, not rate limiting
+      setPlayerStatus('stopped');
+      setElapsedTime(0);
+      setStartTime(null);
+    }
+  };
+
+  // Helper function to convert numeric status to string
+  const getPlayerStatusString = (status: number): string => {
+    // API status constants from PHP
+    const PLAY = 1;
+    const PAUSE = 2;
+    const RESUME = 3;
+    const STOP = 4;
+    
+    switch (status) {
+      case PLAY:
+      case RESUME:
+        return 'playing';  // Both PLAY and RESUME mean timer is actively running
+      case PAUSE:
+        return 'paused';   // Timer is paused, can be resumed
+      case STOP:
+        return 'stopped';  // Timer is stopped/completed
+      default:
+        return 'stopped';
     }
   };
 
@@ -67,15 +133,26 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
     
     setIsLoading(true);
     try {
+      // First check current status to prevent conflicts
+      await fetchPlayerStatus();
+      
       const response = await apiClient.play(ticket.id, user.id);
       if (response.status === 'success') {
         setPlayerStatus('playing');
         setStartTime(new Date());
         setElapsedTime(0);
         onStatusChange?.();
+      } else if (response.status === 'exists') {
+        // Ticket is already being worked on by someone else
+        alert('This ticket is already being worked on by another user.');
+        await fetchPlayerStatus(); // Refresh to get current status
+      } else {
+        console.error('Failed to start ticket:', response.message);
+        alert('Unable to start ticket. Please try again.');
       }
     } catch (error) {
       console.error('Failed to start ticket:', error);
+      alert('Error starting ticket. Please check your connection and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -86,9 +163,12 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
     
     setIsLoading(true);
     try {
-      const response = await apiClient.pause(ticket.id, user.id);
+      // Pass current state (1 = PLAY) to pause API
+      const response = await apiClient.pause(ticket.id, user.id, 1);
       if (response.status === 'success') {
         setPlayerStatus('paused');
+        // Stop the timer but keep elapsed time
+        setStartTime(null);
         onStatusChange?.();
       }
     } catch (error) {
@@ -103,11 +183,15 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
     
     setIsLoading(true);
     try {
-      const response = await apiClient.resume(ticket.id, user.id);
+      // Pass current state (2 = PAUSE) to resume API
+      const response = await apiClient.resume(ticket.id, user.id, 2);
       if (response.status === 'success') {
         setPlayerStatus('playing');
+        // Use the current elapsed time to set the start time correctly
         setStartTime(new Date(Date.now() - elapsedTime));
         onStatusChange?.();
+        // Refresh status immediately to get updated state from server
+        setTimeout(() => fetchPlayerStatus(), 1000);
       }
     } catch (error) {
       console.error('Failed to resume ticket:', error);
@@ -288,10 +372,12 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                         <SelectValue placeholder="Select status" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="3">In Progress</SelectItem>
-                        <SelectItem value="4">Closed</SelectItem>
-                        <SelectItem value="2">Scheduled</SelectItem>
-                        <SelectItem value="5">Reopened</SelectItem>
+                        <SelectItem value="4">Abgeschlossen</SelectItem>
+                        <SelectItem value="13">In Bearbeitung</SelectItem>
+                        <SelectItem value="2">Terminiert</SelectItem>
+                        <SelectItem value="5">Ausstehend</SelectItem>
+                        <SelectItem value="9">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
+                        <SelectItem value="11">Warten auf Rückmeldung (Extern)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

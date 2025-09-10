@@ -8,11 +8,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
-import { WindowManager } from '@/lib/windowManager';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
 import { TicketPlayerControls } from './TicketPlayerControls';
 import { 
-  ArrowLeft,
   Calendar,
   Building,
   User,
@@ -25,18 +23,15 @@ import {
   MessageSquare,
   Download,
   Loader2,
-  ExternalLink,
-  FileText,
-  History,
-  ListTodo
+  X
 } from 'lucide-react';
 
-interface TicketDetailProps {
+interface TicketDetailWindowProps {
   ticket: Ticket;
   onBack: () => void;
 }
 
-export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
+export function TicketDetailWindow({ ticket, onBack }: TicketDetailWindowProps) {
   const { user } = useAuth();
   const [ticketHistory, setTicketHistory] = useState<TicketHistory[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -47,14 +42,6 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
   const [newHistoryStatus, setNewHistoryStatus] = useState('3'); // Default to "In Progress"
   const [isAddingHistory, setIsAddingHistory] = useState(false);
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
-
-  const handleOpenInNewWindow = async () => {
-    try {
-      await WindowManager.openTicketInNewWindow(ticket);
-    } catch (error) {
-      console.error('Failed to open ticket in new window:', error);
-    }
-  };
 
   useEffect(() => {
     fetchTicketData();
@@ -230,11 +217,8 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <Button variant="outline" size="icon" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+      {/* Header - simplified for window mode */}
+      <div className="flex items-center justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
             <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
@@ -252,8 +236,8 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
           <h1 className="text-2xl font-bold">{ticket.summary}</h1>
           <p className="text-muted-foreground">{ticket.subject}</p>
         </div>
-        <Button variant="outline" size="icon" onClick={handleOpenInNewWindow}>
-          <ExternalLink className="h-4 w-4" />
+        <Button variant="ghost" size="icon" onClick={onBack} className="text-muted-foreground hover:text-foreground">
+          <X className="h-4 w-4" />
         </Button>
       </div>
 
@@ -261,32 +245,13 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
         {/* Main Content */}
         <div className="lg:col-span-2 space-y-6">
           <Tabs defaultValue="details" className="space-y-4">
-            <TabsList className="grid w-full grid-cols-3 h-11 bg-muted/50 backdrop-blur-sm">
-              <TabsTrigger 
-                value="details" 
-                className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-              >
-                <FileText className="w-4 h-4 mr-2" />
-                Details
-              </TabsTrigger>
-              <TabsTrigger 
-                value="history" 
-                className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-              >
-                <History className="w-4 h-4 mr-2" />
-                History
-              </TabsTrigger>
-              <TabsTrigger 
-                value="todos" 
-                className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium relative"
-              >
-                <ListTodo className="w-4 h-4 mr-2" />
+            <TabsList>
+              <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="history">History</TabsTrigger>
+              <TabsTrigger value="todos">
                 Todos
                 {todos.length > 0 && (
-                  <Badge 
-                    variant="secondary" 
-                    className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
-                  >
+                  <Badge variant="secondary" className="ml-1">
                     {todos.filter(t => !t.checked).length}/{todos.length}
                   </Badge>
                 )}
@@ -396,14 +361,9 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                     <Button 
                       onClick={handleAddHistory} 
                       disabled={isAddingHistory || !newHistoryText.trim()}
-                      className="ml-auto bg-primary hover:bg-primary/90 text-primary-foreground shadow-md hover:shadow-lg transition-all duration-200"
-                      size="sm"
+                      className="ml-auto"
                     >
-                      {isAddingHistory ? (
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      ) : (
-                        <Plus className="h-4 w-4 mr-2" />
-                      )}
+                      <Plus className="h-4 w-4 mr-2" />
                       Add Entry
                     </Button>
                   </div>
@@ -426,19 +386,13 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
               ) : (
                 <>
                   {ticketHistory.map((entry) => (
-                    <Card key={entry.id} className="transition-all duration-200 hover:shadow-md border-l-4 border-l-primary/20 hover:border-l-primary/50">
-                      <CardHeader className="pb-3">
+                    <Card key={entry.id}>
+                      <CardHeader>
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="p-1.5 bg-primary/10 rounded-full">
-                              <User className="h-4 w-4 text-primary" />
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{entry.user.name}</span>
-                              <Badge variant="outline" className="bg-background border-primary/20 text-primary">
-                                {entry.status_name}
-                              </Badge>
-                            </div>
+                          <div className="flex items-center gap-2">
+                            <User className="h-4 w-4" />
+                            <span className="font-medium">{entry.user.name}</span>
+                            <Badge variant="outline">{entry.status_name}</Badge>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-muted-foreground">
                             <Calendar className="h-3 w-3" />
@@ -485,55 +439,35 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                       onKeyDown={(e) => e.key === 'Enter' && handleAddTodo()}
                       disabled={isAddingTodo}
                     />
-                    <Button 
-                      onClick={handleAddTodo} 
-                      disabled={isAddingTodo || !newTodo.trim()}
-                      className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-md hover:shadow-lg transition-all duration-200 px-3"
-                      size="sm"
-                    >
-                      {isAddingTodo ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Plus className="h-4 w-4" />
-                      )}
+                    <Button onClick={handleAddTodo} disabled={isAddingTodo || !newTodo.trim()}>
+                      <Plus className="h-4 w-4" />
                     </Button>
                   </div>
                 </CardContent>
               </Card>
 
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {todos.map((todo) => (
-                  <Card 
-                    key={todo.id} 
-                    className={`transition-all duration-200 hover:shadow-md ${
-                      todo.checked 
-                        ? 'bg-muted/30 border-green-200/50 dark:border-green-800/50' 
-                        : 'hover:border-primary/30 border-l-4 border-l-transparent hover:border-l-primary/50'
-                    }`}
-                  >
+                  <Card key={todo.id}>
                     <CardContent className="p-4">
                       <div className="flex items-center gap-3">
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="p-1 h-auto rounded-full hover:bg-muted/50 transition-all duration-200 group"
+                          className="p-0 h-auto"
                           onClick={() => handleToggleTodo(todo.id, todo.checked)}
                         >
                           {todo.checked ? (
-                            <CheckCircle className="h-5 w-5 text-green-500 transition-all duration-200 group-hover:scale-110" />
+                            <CheckCircle className="h-5 w-5 text-green-500" />
                           ) : (
-                            <Circle className="h-5 w-5 text-muted-foreground transition-all duration-200 group-hover:text-primary group-hover:scale-110" />
+                            <Circle className="h-5 w-5 text-muted-foreground" />
                           )}
                         </Button>
                         <div className="flex-1">
-                          <p className={`transition-all duration-200 ${
-                            todo.checked 
-                              ? 'line-through text-muted-foreground' 
-                              : 'text-foreground font-medium'
-                          }`}>
+                          <p className={`${todo.checked ? 'line-through text-muted-foreground' : ''}`}>
                             {todo.to_do}
                           </p>
-                          <p className="text-xs text-muted-foreground mt-1">
+                          <p className="text-xs text-muted-foreground">
                             Added {formatDate(todo.created_at)}
                           </p>
                         </div>
@@ -542,13 +476,10 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                   </Card>
                 ))}
                 {todos.length === 0 && (
-                  <Card className="border-dashed">
+                  <Card>
                     <CardContent className="p-8 text-center">
-                      <div className="p-3 bg-muted/30 rounded-full w-fit mx-auto mb-4">
-                        <ListTodo className="h-8 w-8 text-muted-foreground" />
-                      </div>
-                      <p className="text-muted-foreground font-medium">No todos yet</p>
-                      <p className="text-sm text-muted-foreground/70 mt-1">Add your first todo item above</p>
+                      <CheckCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                      <p className="text-muted-foreground">No todos yet</p>
                     </CardContent>
                   </Card>
                 )}

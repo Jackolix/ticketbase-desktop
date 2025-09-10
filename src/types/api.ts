@@ -97,9 +97,13 @@ export interface TodoItem {
 }
 
 export interface PlayerStatus {
-  play_status: string;
-  ticket_id: number;
-  user_id: number;
+  id: number;
+  play_status: number;
+  status_id: number;
+  total_time: number;
+  total_time_raw: string;
+  tmp_description: string;
+  ticket_status_id: number;
 }
 
 export interface ApiResponse<T = any> {
@@ -110,6 +114,8 @@ export interface ApiResponse<T = any> {
   tickets?: any;
   ticket_data?: TicketHistory[];
   check_list?: TodoItem[];
+  playerStatus?: PlayerStatus;
+  users?: User[];
 }
 
 export interface UserStatus {

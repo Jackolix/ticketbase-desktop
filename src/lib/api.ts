@@ -217,22 +217,24 @@ class ApiClient {
     });
   }
 
-  async pause(ticketId: number, userId: number): Promise<ApiResponse> {
+  async pause(ticketId: number, userId: number, currentState: number = 1): Promise<ApiResponse> {
     return this.request<ApiResponse>('/pause', {
       method: 'POST',
       body: JSON.stringify({
         ticket_id: ticketId,
         user_id: userId,
+        current_state: currentState, // 1 for PLAY, 3 for RESUME
       }),
     });
   }
 
-  async resume(ticketId: number, userId: number): Promise<ApiResponse> {
+  async resume(ticketId: number, userId: number, currentState: number = 2): Promise<ApiResponse> {
     return this.request<ApiResponse>('/resume', {
       method: 'POST',
       body: JSON.stringify({
         ticket_id: ticketId,
         user_id: userId,
+        current_state: currentState, // 2 for PAUSE state
       }),
     });
   }

@@ -5,8 +5,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useTickets } from '@/contexts/TicketsContext';
 import { apiClient } from '@/lib/api';
+import { WindowManager } from '@/lib/windowManager';
 import { Ticket } from '@/types/api';
 import { 
   Search,
@@ -20,7 +22,9 @@ import {
   MessageSquare,
   Paperclip,
   RefreshCw,
-  Loader2
+  Loader2,
+  ExternalLink,
+  MoreVertical
 } from 'lucide-react';
 
 interface TicketListProps {
@@ -34,6 +38,15 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [searchedTicket, setSearchedTicket] = useState<Ticket | null>(null);
   const [isSearchingTicket, setIsSearchingTicket] = useState(false);
+
+  const handleOpenInNewWindow = async (ticket: Ticket, event: React.MouseEvent) => {
+    event.stopPropagation();
+    try {
+      await WindowManager.openTicketInNewWindow(ticket);
+    } catch (error) {
+      console.error('Failed to open ticket in new window:', error);
+    }
+  };
 
   // Tickets are now managed by the TicketsContext
 
@@ -250,6 +263,18 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 <span className="text-xs text-muted-foreground">{ticket.ticketMessagesCount}</span>
               </div>
             )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                  <MoreVertical className="h-3 w-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={(e) => handleOpenInNewWindow(ticket, e)}>
+                  <ExternalLink className="h-4 w-4" />
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
         
