@@ -101,7 +101,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: github.event_name != 'release'
         with:
-          name: tauri-app-${{ matrix.platform }}
+          name: tauri-app-${{ matrix.platform }}-${{ matrix.args && 'targeted' || 'default' }}
           path: |
-            src-tauri/target/release/bundle/
-            !src-tauri/target/release/bundle/**/.*
+            src-tauri/target/**/bundle/
+            !src-tauri/target/**/bundle/**/.*
