@@ -151,6 +151,18 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     }
   };
 
+  const decodeHtmlEntities = (text: string) => {
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+  };
+
+  const stripHtmlTags = (html: string) => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    return tmp.textContent || tmp.innerText || '';
+  };
+
   // Get effective description from ticket (description or template_data)
   const getTicketDescription = (ticket: Ticket) => {
     if (ticket.description && ticket.description.trim()) {
@@ -390,7 +402,7 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                       </CardHeader>
                       {entry.technician_reply && (
                         <CardContent>
-                          <p className="whitespace-pre-wrap">{entry.technician_reply}</p>
+                          <p className="whitespace-pre-wrap">{stripHtmlTags(decodeHtmlEntities(entry.technician_reply))}</p>
                           {entry.total_time > 0 && (
                             <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
                               <Clock className="h-3 w-3" />

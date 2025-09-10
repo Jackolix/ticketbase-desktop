@@ -41,8 +41,8 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     setIsSearchingTicket(true);
     try {
       const response = await apiClient.getTicketById(ticketId);
-      if (response.result === 'success' && response.data?.tickets) {
-        const rawTicket = response.data.tickets;
+      if (response.result === 'success' && response.tickets) {
+        const rawTicket = response.tickets;
         
         const transformedTicket: Ticket = {
           id: rawTicket.id,
@@ -73,7 +73,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           created_at: rawTicket.created_at || '',
           ticket_start: '',
           ticketMessagesCount: 0,
-          template_data: '',
+          template_data: rawTicket.template_data || '',
           pool_name: '',
         };
         
@@ -181,16 +181,20 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   }, [searchTerm, tickets]);
 
   const getPriorityColor = (priority: string, index: number) => {
-    if (priority === 'High' || index > 7) return 'destructive';
-    if (priority === 'Medium' || index > 4) return 'default';
+    if (priority === 'VERY_HIGH' || index > 7) return 'destructive';
+    if (priority === 'HIGH' || index > 4) return 'default';
+    if (priority === 'NORMAL') return 'secondary';
     return 'secondary';
   };
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
-      case 'new': return 'default';
-      case 'in progress': return 'secondary';
-      case 'closed': return 'outline';
+      case 'neu': return 'default';
+      case 'ausstehend': return 'secondary';
+      case 'warten auf rückmeldung vom ticketbenutzer': return 'destructive';
+      case 'warten auf rückmeldung (extern)': return 'destructive';
+      case 'terminiert': return 'secondary';
+      case 'abgeschlossen': return 'outline';
       default: return 'secondary';
     }
   };
@@ -345,9 +349,12 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Statuses</SelectItem>
-              <SelectItem value="new">New</SelectItem>
-              <SelectItem value="in progress">In Progress</SelectItem>
-              <SelectItem value="closed">Closed</SelectItem>
+              <SelectItem value="neu">Neu</SelectItem>
+              <SelectItem value="ausstehend">Ausstehend</SelectItem>
+              <SelectItem value="warten auf rückmeldung vom ticketbenutzer">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
+              <SelectItem value="warten auf rückmeldung (extern)">Warten auf Rückmeldung (Extern)</SelectItem>
+              <SelectItem value="terminiert">Terminiert</SelectItem>
+              <SelectItem value="abgeschlossen">Abgeschlossen</SelectItem>
             </SelectContent>
           </Select>
           <Select value={priorityFilter} onValueChange={setPriorityFilter}>
@@ -356,9 +363,9 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Priorities</SelectItem>
+              <SelectItem value="very_high">Very High</SelectItem>
               <SelectItem value="high">High</SelectItem>
-              <SelectItem value="medium">Medium</SelectItem>
-              <SelectItem value="low">Low</SelectItem>
+              <SelectItem value="normal">Normal</SelectItem>
             </SelectContent>
           </Select>
         </div>

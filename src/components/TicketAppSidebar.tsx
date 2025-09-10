@@ -28,7 +28,6 @@ import {
   SidebarGroupLabel,
   SidebarGroupContent,
 } from "@/components/ui/sidebar"
-import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/contexts/AuthContext"
 import { useTheme } from "@/contexts/ThemeContext"
@@ -94,7 +93,7 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader className="p-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 group-data-[collapsible=icon]:justify-center">
           <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
             <img 
               src="/logo.png" 
@@ -114,9 +113,9 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
               }}
             />
           </div>
-          <div className="truncate">
+          <div className="truncate group-data-[collapsible=icon]:hidden">
             <h2 className="text-lg font-semibold">Ticketbase</h2>
-            <p className="text-xs text-muted-foreground">Technican</p>
+            <p className="text-xs text-muted-foreground">{user?.role?.name ? user.role.name.charAt(0).toUpperCase() + user.role.name.slice(1) : 'User'}</p>
           </div>
         </div>
       </SidebarHeader>
@@ -136,14 +135,14 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                     isActive={item.isActive}
                     tooltip={item.title}
                     className={`
-                      h-10 px-3 rounded-lg transition-all duration-200 hover:bg-accent/80
+                      h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent
                       group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center
                       ${item.isActive 
-                        ? 'bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-200/20 dark:border-blue-800/40 text-blue-700 dark:text-blue-300 shadow-sm' 
-                        : 'hover:bg-accent/50'
+                        ? 'bg-sidebar-accent !text-sidebar-accent-foreground border border-sidebar-border shadow-sm' 
+                        : '!text-sidebar-foreground hover:bg-sidebar-accent/50 hover:!text-sidebar-accent-foreground'
                       }
                       ${item.variant === 'default' 
-                        ? 'bg-gradient-to-r from-green-500/10 to-emerald-500/10 border border-green-200/20 dark:border-green-800/40 text-green-700 dark:text-green-300' 
+                        ? 'bg-sidebar-primary !text-sidebar-primary-foreground border border-sidebar-border' 
                         : ''
                       }
                     `}
@@ -174,11 +173,11 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                   isActive={currentView === "settings"}
                   tooltip="Settings"
                   className={`
-                    h-10 px-3 rounded-lg transition-all duration-200 hover:bg-accent/80
+                    h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent
                     group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center
                     ${currentView === "settings" 
-                      ? 'bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-200/20 dark:border-blue-800/40 text-blue-700 dark:text-blue-300 shadow-sm' 
-                      : 'hover:bg-accent/50'
+                      ? 'bg-sidebar-accent !text-sidebar-accent-foreground border border-sidebar-border shadow-sm' 
+                      : '!text-sidebar-foreground hover:bg-sidebar-accent/50 hover:!text-sidebar-accent-foreground'
                     }
                   `}
                 >
@@ -193,23 +192,21 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                 <SidebarMenuButton
                   asChild
                   tooltip={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-accent/80 hover:bg-orange-500/10 hover:border hover:border-orange-200/20 dark:hover:border-orange-800/40 group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent !text-sidebar-foreground hover:!text-sidebar-accent-foreground group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
                 >
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                  <button
                     onClick={toggleTheme}
-                    className="w-full justify-start gap-3 h-auto p-0 hover:bg-transparent group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center"
+                    className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center"
                   >
                     {theme === 'dark' ? (
-                      <Sun className="h-4 w-4 shrink-0 text-orange-500" />
+                      <Sun className="h-4 w-4 shrink-0" />
                     ) : (
-                      <Moon className="h-4 w-4 shrink-0 text-blue-600" />
+                      <Moon className="h-4 w-4 shrink-0" />
                     )}
                     <span className="font-medium group-data-[collapsible=icon]:sr-only">
                       {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
                     </span>
-                  </Button>
+                  </button>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               
@@ -217,17 +214,13 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                 <SidebarMenuButton
                   asChild
                   tooltip="Notifications"
-                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-accent/80 hover:bg-blue-500/10 hover:border hover:border-blue-200/20 dark:hover:border-blue-800/40 group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent !text-sidebar-foreground hover:!text-sidebar-accent-foreground group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
                 >
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start gap-3 h-auto p-0 hover:bg-transparent group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center"
-                  >
+                  <button className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
                     <Bell className="h-4 w-4 shrink-0" />
                     <span className="font-medium group-data-[collapsible=icon]:sr-only">Notifications</span>
-                    <div className="ml-auto w-2 h-2 bg-red-500 rounded-full animate-pulse group-data-[collapsible=icon]:hidden" />
-                  </Button>
+                    <div className="ml-auto w-2 h-2 bg-destructive rounded-full animate-pulse group-data-[collapsible=icon]:hidden" />
+                  </button>
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
@@ -235,16 +228,12 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                 <SidebarMenuButton
                   asChild
                   tooltip="Start Work Session"
-                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-accent/80 hover:bg-green-500/10 hover:border hover:border-green-200/20 dark:hover:border-green-800/40 group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent !text-sidebar-foreground hover:!text-sidebar-accent-foreground group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
                 >
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start gap-3 h-auto p-0 hover:bg-transparent group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center"
-                  >
-                    <Play className="h-4 w-4 shrink-0 text-green-600" />
+                  <button className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
+                    <Play className="h-4 w-4 shrink-0" />
                     <span className="font-medium group-data-[collapsible=icon]:sr-only">Start Work</span>
-                  </Button>
+                  </button>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -261,17 +250,15 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
             <SidebarMenuButton 
               asChild 
               tooltip="Logout"
-              className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-red-50 dark:hover:bg-red-950/50 hover:border hover:border-red-200/40 dark:hover:border-red-800/40 group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+              className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-destructive/10 !text-destructive hover:!text-destructive group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
             >
-              <Button
-                variant="ghost"
-                size="sm"
+              <button
                 onClick={logout}
-                className="w-full justify-start gap-3 h-auto p-0 text-red-600 hover:text-red-700 hover:bg-transparent group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center"
+                className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center"
               >
                 <LogOut className="h-4 w-4 shrink-0" />
                 <span className="font-medium group-data-[collapsible=icon]:sr-only">Logout</span>
-              </Button>
+              </button>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

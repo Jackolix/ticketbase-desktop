@@ -107,6 +107,7 @@ export interface ApiResponse<T = any> {
   result?: string;
   message?: string;
   data?: T;
+  tickets?: any;
   ticket_data?: TicketHistory[];
   check_list?: TodoItem[];
 }
