@@ -216,14 +216,17 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     if (!dateString) return 'No date';
     try {
       const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', { 
+      if (isNaN(date.getTime())) {
+        return 'Invalid Date';
+      }
+      return date.toLocaleDateString(undefined, { 
         month: 'short', 
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
       });
     } catch {
-      return dateString;
+      return 'Invalid Date';
     }
   };
 
