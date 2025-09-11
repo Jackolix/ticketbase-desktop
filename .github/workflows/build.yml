@@ -109,3 +109,16 @@ jobs:
             src-tauri/target/**/bundle/**/*.msi
             src-tauri/target/**/bundle/**/*.AppImage
             src-tauri/target/**/bundle/**/*.deb
+
+      - name: Deploy to releases server
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # Install SSH key
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.HOST }} >> ~/.ssh/known_hosts
+          
+          # Create version directory and copy files
+          ssh ${{ secrets.USER }}@${{ secrets.HOST }} "mkdir -p releases/${{ github.ref_name }}"
+          scp -r src-tauri/target/release/bundle/* ${{ secrets.USER }}@${{ secrets.HOST }}:releases/

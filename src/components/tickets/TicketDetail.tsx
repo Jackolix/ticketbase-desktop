@@ -158,9 +158,24 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
   const formatDate = (dateString: string) => {
     if (!dateString) return 'No date';
     try {
-      return new Date(dateString).toLocaleString();
+      // Handle DD-MM-YYYY HH:mm format
+      const match = dateString.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
+      if (match) {
+        const [, day, month, year, hour, minute] = match;
+        const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(minute));
+        if (!isNaN(date.getTime())) {
+          return date.toLocaleString();
+        }
+      }
+      
+      // Fallback to standard date parsing
+      const date = new Date(dateString);
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleString();
+      }
+      return 'Invalid Date';
     } catch {
-      return dateString;
+      return 'Invalid Date';
     }
   };
 
