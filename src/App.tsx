@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import "./App.css";
+import { check } from "@tauri-apps/plugin-updater";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider } from "./contexts/TicketsContext";
@@ -219,6 +220,24 @@ function AppContent() {
 }
 
 function App() {
+  // Check for updates when app starts
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      try {
+        const update = await check();
+        if (update) {
+          console.log('Update available:', update.version);
+          // Install update automatically (you can customize this behavior)
+          await update.downloadAndInstall();
+        }
+      } catch (error) {
+        console.error('Update check failed:', error);
+      }
+    };
+
+    checkForUpdates();
+  }, []);
+
   // Check if this is a ticket window (has ticketWindow=true query parameter)
   const isTicketWindow = new URLSearchParams(window.location.search).get('ticketWindow') === 'true';
   

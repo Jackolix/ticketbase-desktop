@@ -24,7 +24,8 @@ import {
   RefreshCw,
   Loader2,
   ExternalLink,
-  MoreVertical
+  MoreVertical,
+  Tickets
 } from 'lucide-react';
 
 interface TicketListProps {
@@ -363,12 +364,13 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
             <Input
               placeholder="Search tickets..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10"
+              style={{ paddingLeft: '2.75rem' }}
             />
           </div>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -401,29 +403,48 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
       {/* Ticket Tabs */}
       <Tabs defaultValue="my" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="my" className="flex items-center gap-2">
-            <User className="h-4 w-4" />
+        <TabsList className="grid w-full grid-cols-3 h-11 bg-muted/50 backdrop-blur-sm">
+          <TabsTrigger 
+            value="my" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
+          >
+            <User className="w-4 h-4 mr-2" />
             My Tickets
             {tickets.my_tickets.length > 0 && (
-              <Badge variant="secondary" className="ml-1">
+              <Badge 
+                variant="secondary" 
+                className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
+              >
                 {getFilteredTickets(tickets.my_tickets).length}
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="new" className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4" />
+          <TabsTrigger 
+            value="new" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
+          >
+            <AlertCircle className="w-4 h-4 mr-2" />
             New Tickets
             {tickets.new_tickets.length > 0 && (
-              <Badge variant="secondary" className="ml-1">
+              <Badge 
+                variant="secondary" 
+                className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
+              >
                 {getFilteredTickets(tickets.new_tickets).length}
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="all" className="flex items-center gap-2">
+          <TabsTrigger 
+            value="all" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium relative"
+          >
+            <Tickets className="w-4 h-4 mr-2" />
             All Tickets
             {tickets.all_tickets.length > 0 && (
-              <Badge variant="secondary" className="ml-1">
+              <Badge 
+                variant="secondary" 
+                className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
+              >
                 {getFilteredTickets(tickets.all_tickets).length}
               </Badge>
             )}

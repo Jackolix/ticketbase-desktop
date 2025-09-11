@@ -23,6 +23,15 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Jackolix/ticketbase-desktop/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5OTcxNTZGREI2MEQ5NTcKUldSWDJXRGJieFdYR1ljRUdDV1hNWmhVbjJvVjFFUEZ2WEpqZnNkQmh0enJyYnVIbm04cmlBUEMK"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

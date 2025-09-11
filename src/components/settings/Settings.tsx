@@ -168,17 +168,26 @@ export function Settings() {
       )}
 
       <Tabs defaultValue="profile" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="profile" className="flex items-center gap-2">
-            <User className="h-4 w-4" />
+        <TabsList className="grid w-full grid-cols-3 h-11 bg-muted/50 backdrop-blur-sm">
+          <TabsTrigger 
+            value="profile" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
+          >
+            <User className="w-4 h-4 mr-2" />
             Profile
           </TabsTrigger>
-          <TabsTrigger value="password" className="flex items-center gap-2">
-            <Lock className="h-4 w-4" />
+          <TabsTrigger 
+            value="password" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
+          >
+            <Lock className="w-4 h-4 mr-2" />
             Password
           </TabsTrigger>
-          <TabsTrigger value="notifications" className="flex items-center gap-2">
-            <Bell className="h-4 w-4" />
+          <TabsTrigger 
+            value="notifications" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
+          >
+            <Bell className="w-4 h-4 mr-2" />
             Notifications
           </TabsTrigger>
         </TabsList>
