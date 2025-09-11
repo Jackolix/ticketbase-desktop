@@ -3,6 +3,8 @@ name: 'Build and Release'
 on:
   push:
     branches: [main, master]
+    tags:
+      - 'v*'
   pull_request:
     branches: [main, master]
   release:
@@ -71,8 +73,8 @@ jobs:
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }}
-          # Only create release on actual releases, not on every push
-          releaseDraft: ${{ github.event_name == 'release' }}
+          # Create release on tag push or release events
+          releaseDraft: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' }}
           releaseBody: |
             ## What's Changed
             
