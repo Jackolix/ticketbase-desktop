@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider } from "./contexts/TicketsContext";
 import { UpdaterProvider } from "./contexts/UpdaterContext";
+import { NotificationProvider } from "./contexts/NotificationContext";
 import { CustomLoginForm } from "./components/auth/CustomLoginForm";
 import { TicketAppSidebar } from "./components/TicketAppSidebar";
 import { Dashboard } from "./components/dashboard/Dashboard";
@@ -14,6 +15,7 @@ import { Settings } from "./components/settings/Settings";
 import { Reports } from "./components/reports/Reports";
 import { TicketWindow } from "./components/tickets/TicketWindow";
 import { UpdateNotification } from "./components/ui/UpdateNotification";
+import { Toaster } from "./components/ui/sonner";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { 
@@ -213,6 +215,7 @@ function AppContent() {
         </div>
       </SidebarInset>
       <UpdateNotification />
+      <Toaster />
     </SidebarProvider>
   );
 }
@@ -233,7 +236,10 @@ function App() {
         <UpdaterProvider>
           <AuthProvider>
             <TicketsProvider>
-              <TicketWindow ticketId={ticketId} />
+              <NotificationProvider>
+                <TicketWindow ticketId={ticketId} />
+                <Toaster />
+              </NotificationProvider>
             </TicketsProvider>
           </AuthProvider>
         </UpdaterProvider>
@@ -246,7 +252,9 @@ function App() {
       <UpdaterProvider>
         <AuthProvider>
           <TicketsProvider>
-            <AppContent />
+            <NotificationProvider>
+              <AppContent />
+            </NotificationProvider>
           </TicketsProvider>
         </AuthProvider>
       </UpdaterProvider>

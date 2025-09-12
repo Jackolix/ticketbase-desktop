@@ -4,10 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUpdater } from '@/contexts/UpdaterContext';
+import { useNotifications } from '@/contexts/NotificationContext';
 import { apiClient } from '@/lib/api';
 import { 
   User, 
@@ -18,12 +20,15 @@ import {
   RefreshCw,
   Loader2,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Volume2,
+  Monitor
 } from 'lucide-react';
 
 export function Settings() {
   const { user } = useAuth();
   const { currentVersion, isCheckingForUpdate, checkForUpdate, lastError, clearError, lastCheckTime, debugInfo } = useUpdater();
+  const { settings, updateSettings, requestNotificationPermission } = useNotifications();
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     phone: user?.phone || ''
@@ -327,7 +332,106 @@ export function Settings() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="notifications">
+        <TabsContent value="notifications" className="space-y-4">
+          {/* Desktop Notifications */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Monitor className="h-5 w-5" />
+                Desktop Notifications
+              </CardTitle>
+              <CardDescription>
+                Configure desktop notifications for new tickets and assignments.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>New Tickets Available</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Get notified when new tickets appear in your pool
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.enableNewTicketNotifications}
+                  onCheckedChange={(checked) => updateSettings({ enableNewTicketNotifications: checked })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Assigned Tickets</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Get notified when tickets are assigned to you
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.enableAssignedTicketNotifications}
+                  onCheckedChange={(checked) => updateSettings({ enableAssignedTicketNotifications: checked })}
+                />
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Notification Sound</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Play sound with notifications
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.enableSound}
+                    onCheckedChange={(checked) => updateSettings({ enableSound: checked })}
+                  />
+                </div>
+
+                {settings.enableSound && (
+                  <div className="ml-8 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">Volume</Label>
+                      <span className="text-sm text-muted-foreground">
+                        {Math.round(settings.soundVolume * 100)}%
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-3">
+                      <Volume2 className="h-4 w-4 text-muted-foreground" />
+                      <Slider
+                        value={[settings.soundVolume]}
+                        onValueChange={([value]) => updateSettings({ soundVolume: value })}
+                        max={1}
+                        min={0}
+                        step={0.1}
+                        className="flex-1"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-4 border-t">
+                <Button
+                  onClick={async () => {
+                    try {
+                      const granted = await requestNotificationPermission();
+                      if (granted) {
+                        setSuccessMessage('Desktop notification permission granted');
+                      } else {
+                        setErrorMessage('Desktop notification permission denied');
+                      }
+                    } catch (error) {
+                      setErrorMessage('Failed to request notification permission');
+                    }
+                  }}
+                  variant="outline"
+                >
+                  <Bell className="w-4 h-4 mr-2" />
+                  Enable Desktop Notifications
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Email Notifications */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -422,7 +526,7 @@ export function Settings() {
                   variant="outline"
                   disabled={isLoadingMail}
                 >
-                  Enable All Notifications
+                  Enable All Email Notifications
                 </Button>
               </div>
             </CardContent>
