@@ -23,7 +23,7 @@ import {
 
 export function Settings() {
   const { user } = useAuth();
-  const { currentVersion, isCheckingForUpdate, checkForUpdate, lastError, clearError } = useUpdater();
+  const { currentVersion, isCheckingForUpdate, checkForUpdate, lastError, clearError, lastCheckTime, debugInfo } = useUpdater();
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     phone: user?.phone || ''
@@ -456,6 +456,18 @@ export function Settings() {
                   <p className="text-sm text-muted-foreground">
                     The application automatically checks for updates every 30 minutes. When an update is available, you'll see a notification in the bottom-right corner.
                   </p>
+                  
+                  {lastCheckTime && (
+                    <p className="text-xs text-muted-foreground">
+                      Last checked: {lastCheckTime.toLocaleString()}
+                    </p>
+                  )}
+                  
+                  {debugInfo && (
+                    <div className="p-2 bg-muted/30 rounded text-xs text-muted-foreground">
+                      Status: {debugInfo}
+                    </div>
+                  )}
                   <Button
                     onClick={checkForUpdate}
                     disabled={isCheckingForUpdate}

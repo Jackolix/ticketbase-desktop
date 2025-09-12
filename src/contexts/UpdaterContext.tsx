@@ -11,6 +11,8 @@ interface UpdaterContextType {
   isInstalling: boolean;
   downloadProgress: number;
   lastError: string | null;
+  lastCheckTime: Date | null;
+  debugInfo: string;
   checkForUpdate: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
@@ -40,6 +42,8 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   const [isInstalling, setIsInstalling] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [lastCheckTime, setLastCheckTime] = useState<Date | null>(null);
+  const [debugInfo, setDebugInfo] = useState('');
 
   // Get current app version on mount
   useEffect(() => {
@@ -96,40 +100,76 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
       const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
       return () => clearInterval(interval);
     }
-  }, [availableUpdate, isCheckingForUpdate, isInstalling]);
+  }, []); // Remove dependencies to prevent infinite loops
 
   const checkForUpdate = async () => {
-    if (isCheckingForUpdate || isInstalling) return;
+    // Prevent multiple simultaneous checks but don't silently fail
+    if (isCheckingForUpdate) {
+      setDebugInfo('Update check already in progress...');
+      return;
+    }
+    
+    if (isInstalling) {
+      setDebugInfo('Cannot check for updates while installing...');
+      return;
+    }
 
+    setDebugInfo('Starting update check...');
+    const startTime = new Date();
+    
     try {
       setIsCheckingForUpdate(true);
       setLastError(null);
-      const update = await check();
+      setLastCheckTime(startTime);
+      
+      setDebugInfo('Connecting to update server...');
+      
+      const update = await Promise.race([
+        check(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Update check timeout after 30 seconds')), 30000))
+      ]) as Update | null;
       
       if (update) {
-        console.log('Update available:', update.version);
+        setDebugInfo(`Update found: v${update.version} (current: v${update.currentVersion})`);
         setAvailableUpdate(update);
         setIsUpdateDownloaded(false);
       } else {
+        setDebugInfo('No updates available - you have the latest version');
         setAvailableUpdate(null);
         setIsUpdateDownloaded(false);
       }
+      
+      // Clear debug info after 5 seconds if successful
+      setTimeout(() => {
+        if (!lastError) {
+          setDebugInfo('');
+        }
+      }, 5000);
+      
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      console.error('Update check failed:', errorMessage);
       
       if (errorMessage.includes('Could not fetch a valid release JSON')) {
-        setLastError('Update check failed: No updates available yet. The latest.json file will be available after the next release is published with updater support.');
+        setLastError('No update manifest found. This is normal until a new release is published with updater support.');
+        setDebugInfo('Missing latest.json file - waiting for new release');
+      } else if (errorMessage.includes('timeout')) {
+        setLastError('Update check timed out. Please check your internet connection.');
+        setDebugInfo('Connection timeout after 30 seconds');
       } else {
         setLastError(`Update check failed: ${errorMessage}`);
+        setDebugInfo(`Error: ${errorMessage}`);
       }
     } finally {
       setIsCheckingForUpdate(false);
+      const endTime = new Date();
+      const duration = endTime.getTime() - startTime.getTime();
+      setDebugInfo(prev => `${prev} (took ${duration}ms)`);
     }
   };
 
   const clearError = () => {
     setLastError(null);
+    setDebugInfo('');
   };
 
   const downloadUpdate = async () => {
@@ -198,6 +238,8 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
     isInstalling,
     downloadProgress,
     lastError,
+    lastCheckTime,
+    debugInfo,
     checkForUpdate,
     downloadUpdate,
     installUpdate,
