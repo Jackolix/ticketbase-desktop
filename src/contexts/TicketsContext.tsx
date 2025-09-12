@@ -13,6 +13,11 @@ interface TicketsContextType {
   isRefreshing: boolean;
   lastUpdated: Date | null;
   refreshTickets: () => Promise<void>;
+  loadAllTicketsForSearch: () => Promise<{
+    new_tickets: Ticket[];
+    my_tickets: Ticket[];
+    all_tickets: Ticket[];
+  }>;
   updateTicket: (updatedTicket: Ticket) => void;
   addTicket: (newTicket: Ticket) => void;
 }
@@ -37,6 +42,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     setIsRefreshing(true);
     
     try {
+      // Use normal filtered endpoint for dashboard performance
       const response = await apiClient.getTickets(
         user.id,
         user.user_group_id,
@@ -82,6 +88,26 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  const loadAllTicketsForSearch = useCallback(async () => {
+    if (!user) return { new_tickets: [], my_tickets: [], all_tickets: [] };
+
+    try {
+      // Use unfiltered endpoint for search to get all accessible tickets
+      const response = await apiClient.getTicketsUnfiltered(
+        user.id,
+        1, // Force user_group_id to 1 to bypass pool filtering
+        undefined, // Don't filter by company_id
+        undefined, // Don't filter by location_id  
+        undefined, // Don't restrict to specific user
+        undefined  // Don't restrict by sub_user_group_id
+      );
+      return response;
+    } catch (error) {
+      console.error('Failed to fetch all tickets for search:', error);
+      return { new_tickets: [], my_tickets: [], all_tickets: [] };
+    }
+  }, [user]);
+
   // Initial fetch when user changes
   useEffect(() => {
     if (user) {
@@ -122,6 +148,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     isRefreshing,
     lastUpdated,
     refreshTickets,
+    loadAllTicketsForSearch,
     updateTicket,
     addTicket,
   };

@@ -365,6 +365,67 @@ class ApiClient {
     return response.blob();
   }
 
+  // Reports
+  async getReport4(startDate: string, endDate: string): Promise<ApiResponse<{report: any[]}>> {
+    return this.request<ApiResponse<{report: any[]}>>(`/Report4?start_date=${startDate}&end_date=${endDate}`, {
+      method: 'GET',
+    });
+  }
+
+  async getReport5(startDate: string, endDate: string): Promise<ApiResponse<{report: any[]}>> {
+    return this.request<ApiResponse<{report: any[]}>>(`/Report5?start_date=${startDate}&end_date=${endDate}`, {
+      method: 'GET',
+    });
+  }
+
+  async getTopUsers(month: number): Promise<ApiResponse<{top_users: any[]}>> {
+    return this.request<ApiResponse<{top_users: any[]}>>(`/getTopUsers?month=${month}`, {
+      method: 'GET',
+    });
+  }
+
+  // Enhanced ticket search with additional filters (like web interface)
+  async searchTickets(filters: {
+    user_id: number;
+    user_group_id: number;
+    company_id?: number;
+    location_id?: number;
+    for_user_id?: number;
+    sub_user_group_id?: number;
+    customer_name?: string;
+    date_from?: string;
+    date_to?: string;
+    status?: string;
+    priority?: string;
+  }): Promise<TicketsResponse> {
+    return this.request<TicketsResponse>('/getTickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: filters.user_id,
+        user_group_id: filters.user_group_id,
+        company_id: filters.company_id,
+        location_id: filters.location_id,
+        for_user_id: filters.for_user_id,
+        sub_user_group_id: filters.sub_user_group_id,
+      }),
+    });
+  }
+
+  // Get all tickets without pool filtering using test endpoint
+  async getTicketsUnfiltered(userId: number, userGroupId: number, companyId?: number, locationId?: number, forUserId?: number, subUserGroupId?: number): Promise<TicketsResponse> {
+    return this.request<TicketsResponse>('/testGetTickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: userId,
+        user_group_id: userGroupId,
+        company_id: companyId,
+        location_id: locationId,
+        for_user_id: forUserId,
+        sub_user_group_id: subUserGroupId,
+      }),
+    });
+  }
+
   // Utility
   isAuthenticated(): boolean {
     return !!this.token;

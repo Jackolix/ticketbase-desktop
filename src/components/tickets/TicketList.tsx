@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -6,10 +6,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Label } from '@/components/ui/label';
 import { useTickets } from '@/contexts/TicketsContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
-import { Ticket } from '@/types/api';
+import { Ticket, Company } from '@/types/api';
 import { 
   Search,
   Calendar,
@@ -25,7 +27,10 @@ import {
   Loader2,
   ExternalLink,
   MoreVertical,
-  Tickets
+  Tickets,
+  Filter,
+  Wrench,
+  ArrowUpDown
 } from 'lucide-react';
 
 interface TicketListProps {
@@ -33,12 +38,96 @@ interface TicketListProps {
 }
 
 export function TicketList({ onTicketSelect }: TicketListProps) {
-  const { tickets, isLoading, isRefreshing, refreshTickets, lastUpdated } = useTickets();
+  const { tickets, isLoading, isRefreshing, refreshTickets, lastUpdated, loadAllTicketsForSearch } = useTickets();
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
+  const [customerFilter, setCustomerFilter] = useState('');
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [dateFromFilter, setDateFromFilter] = useState('');
+  const [dateToFilter, setDateToFilter] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [sortBy, setSortBy] = useState('date-desc');
+  const [customers, setCustomers] = useState<Company[]>([]);
   const [searchedTicket, setSearchedTicket] = useState<Ticket | null>(null);
   const [isSearchingTicket, setIsSearchingTicket] = useState(false);
+  const [allTicketsForSearch, setAllTicketsForSearch] = useState<{
+    new_tickets: Ticket[];
+    my_tickets: Ticket[];
+    all_tickets: Ticket[];
+  } | null>(null);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Save search state to sessionStorage
+  const saveSearchState = () => {
+    const searchState = {
+      searchTerm,
+      statusFilter,
+      priorityFilter,
+      customerFilter,
+      dateFromFilter,
+      dateToFilter,
+      showAdvancedFilters,
+      sortBy
+    };
+    sessionStorage.setItem('ticketSearchState', JSON.stringify(searchState));
+  };
+
+  // Restore search state from sessionStorage
+  useEffect(() => {
+    const savedState = sessionStorage.getItem('ticketSearchState');
+    if (savedState) {
+      try {
+        const state = JSON.parse(savedState);
+        setSearchTerm(state.searchTerm || '');
+        setStatusFilter(state.statusFilter || 'all');
+        setPriorityFilter(state.priorityFilter || 'all');
+        setCustomerFilter(state.customerFilter || '');
+        setDateFromFilter(state.dateFromFilter || '');
+        setDateToFilter(state.dateToFilter || '');
+        setShowAdvancedFilters(state.showAdvancedFilters || false);
+        setSortBy(state.sortBy || 'date-desc');
+      } catch (error) {
+        console.error('Failed to restore search state:', error);
+      }
+    }
+  }, []);
+
+  // Save search state whenever filters change
+  useEffect(() => {
+    saveSearchState();
+  }, [searchTerm, statusFilter, priorityFilter, customerFilter, dateFromFilter, dateToFilter, showAdvancedFilters, sortBy]);
+
+  // Load customers for filtering
+  useEffect(() => {
+    const loadCustomers = async () => {
+      try {
+        const response = await apiClient.getCustomers();
+        if (response.status === 'success' && 'customers' in response) {
+          setCustomers(response.customers as Company[]);
+        }
+      } catch (error) {
+        console.error('Failed to load customers:', error);
+      }
+    };
+    loadCustomers();
+  }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(event.target as Node)) {
+        setShowCustomerDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   const handleOpenInNewWindow = async (ticket: Ticket, event: React.MouseEvent) => {
     event.stopPropagation();
@@ -48,6 +137,49 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       console.error('Failed to open ticket in new window:', error);
     }
   };
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setPriorityFilter('all');
+    setCustomerFilter('');
+    setCustomerSearchTerm('');
+    setShowCustomerDropdown(false);
+    setDateFromFilter('');
+    setDateToFilter('');
+    setSortBy('date-desc');
+    setAllTicketsForSearch(null); // Clear all tickets cache
+  };
+
+  const handleCustomerSelect = async (customer: Company) => {
+    setCustomerFilter(customer.id.toString());
+    setCustomerSearchTerm(customer.name);
+    setShowCustomerDropdown(false);
+    
+    // Load all tickets for better search results when customer filter is applied
+    if (!allTicketsForSearch) {
+      try {
+        const allTickets = await loadAllTicketsForSearch();
+        setAllTicketsForSearch(allTickets);
+      } catch (error) {
+        console.error('Failed to load all tickets for search:', error);
+      }
+    }
+  };
+
+  const handleCustomerClear = () => {
+    setCustomerFilter('');
+    setCustomerSearchTerm('');
+    setShowCustomerDropdown(false);
+    // Clear all tickets cache when no longer needed
+    setAllTicketsForSearch(null);
+  };
+
+  // Filter customers based on search term
+  const filteredCustomers = customers.filter(customer =>
+    customer.name.toLowerCase().includes(customerSearchTerm.toLowerCase()) ||
+    customer.number?.toLowerCase().includes(customerSearchTerm.toLowerCase())
+  );
 
   // Tickets are now managed by the TicketsContext
 
@@ -106,24 +238,97 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   const filterTickets = (ticketList: Ticket[]) => {
     return ticketList.filter(ticket => {
       const effectiveDescription = getTicketDescription(ticket);
+      
+      // Search filter
       const matchesSearch = !searchTerm || 
         ticket.summary.toLowerCase().includes(searchTerm.toLowerCase()) ||
         effectiveDescription.toLowerCase().includes(searchTerm.toLowerCase()) ||
         ticket.company.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         ticket.id.toString().includes(searchTerm);
         
+      // Status filter
       const matchesStatus = statusFilter === 'all' || ticket.status.toLowerCase() === statusFilter;
+      
+      // Priority filter
       const matchesPriority = priorityFilter === 'all' || ticket.priority.toLowerCase() === priorityFilter;
       
-      return matchesSearch && matchesStatus && matchesPriority;
+      // Customer filter - find the selected customer name and search broadly
+      const matchesCustomer = !customerFilter || (() => {
+        const selectedCustomer = customers.find(c => c.id.toString() === customerFilter);
+        if (!selectedCustomer) return true;
+        
+        const customerName = selectedCustomer.name.toLowerCase();
+        const customerNumber = selectedCustomer.number?.toLowerCase() || '';
+        
+        return ticket.company.id.toString() === customerFilter ||
+               ticket.company.name.toLowerCase().includes(customerName) ||
+               (customerNumber && ticket.company.number?.toLowerCase().includes(customerNumber)) ||
+               ticket.summary.toLowerCase().includes(customerName) ||
+               effectiveDescription.toLowerCase().includes(customerName);
+      })();
+      
+      // Date filter
+      const matchesDate = (!dateFromFilter && !dateToFilter) || (() => {
+        const ticketDate = new Date(ticket.created_at);
+        const fromDate = dateFromFilter ? new Date(dateFromFilter) : null;
+        const toDate = dateToFilter ? new Date(dateToFilter) : null;
+        
+        if (fromDate && toDate) {
+          return ticketDate >= fromDate && ticketDate <= toDate;
+        } else if (fromDate) {
+          return ticketDate >= fromDate;
+        } else if (toDate) {
+          return ticketDate <= toDate;
+        }
+        return true;
+      })();
+      
+      return matchesSearch && matchesStatus && matchesPriority && matchesCustomer && matchesDate;
     });
   };
 
-  // Enhanced filter function that includes searched ticket
+  // Sort tickets based on sortBy value
+  const sortTickets = (ticketList: Ticket[]) => {
+    const sorted = [...ticketList].sort((a, b) => {
+      switch (sortBy) {
+        case 'date-desc':
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        case 'date-asc':
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        case 'priority-high':
+          return b.index - a.index;
+        case 'priority-low':
+          return a.index - b.index;
+        case 'id-desc':
+          return b.id - a.id;
+        case 'id-asc':
+          return a.id - b.id;
+        case 'company-asc':
+          return a.company.name.localeCompare(b.company.name);
+        case 'company-desc':
+          return b.company.name.localeCompare(a.company.name);
+        case 'status-asc':
+          return a.status.localeCompare(b.status);
+        case 'status-desc':
+          return b.status.localeCompare(a.status);
+        default:
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+    });
+    return sorted;
+  };
+
+  // Enhanced filter function that includes searched ticket and uses all tickets when needed
   const getFilteredTickets = (ticketList: Ticket[]) => {
-    const filtered = filterTickets(ticketList);
+    // Use all tickets for search when customer filter is active and we have them loaded
+    const ticketsToFilter = (customerFilter && allTicketsForSearch) 
+      ? [...allTicketsForSearch.new_tickets, ...allTicketsForSearch.my_tickets, ...allTicketsForSearch.all_tickets]
+      : ticketList;
+      
+    const filtered = filterTickets(ticketsToFilter);
     
     // If we have a searched ticket and it matches the filters, include it
+    let finalTickets = filtered;
     if (searchedTicket) {
       const searchedMatches = 
         (statusFilter === 'all' || searchedTicket.status.toLowerCase() === statusFilter) &&
@@ -133,12 +338,12 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         // Check if the searched ticket is already in the list
         const existsInList = filtered.some(ticket => ticket.id === searchedTicket.id);
         if (!existsInList) {
-          return [searchedTicket, ...filtered];
+          finalTickets = [searchedTicket, ...filtered];
         }
       }
     }
     
-    return filtered;
+    return sortTickets(finalTickets);
   };
 
   // Get effective description from ticket (description or template_data)
@@ -247,9 +452,15 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     }
   };
 
-  const TicketItem = ({ ticket }: { ticket: Ticket }) => (
-    <Card className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => onTicketSelect(ticket)}>
-      <CardContent className="p-4">
+  const TicketItem = ({ ticket }: { ticket: Ticket }) => {
+    const isCurrentUserTicket = user && ticket.ticketTerminatedUser && 
+      (ticket.ticketTerminatedUser === user.name);
+    
+    return (
+      <Card className={`cursor-pointer hover:bg-accent/50 transition-colors ${
+        isCurrentUserTicket ? 'border-l-4 border-l-blue-500 bg-blue-500/10 dark:bg-blue-400/10' : ''
+      }`} onClick={() => onTicketSelect(ticket)}>
+        <CardContent className="p-4">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-2">
             <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
@@ -310,6 +521,16 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             <User className="h-3 w-3" />
             <span className="truncate">{ticket.ticketUser || ticket.ticketCreator}</span>
           </div>
+          {ticket.ticketTerminatedUser && (
+            <div className={`flex items-center gap-1 ${
+              isCurrentUserTicket ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-muted-foreground'
+            }`}>
+              <Wrench className="h-3 w-3" />
+              <span className="truncate">
+                {isCurrentUserTicket ? `You (${ticket.ticketTerminatedUser})` : ticket.ticketTerminatedUser}
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-1 text-muted-foreground">
             <Calendar className="h-3 w-3" />
             <span>{formatDate(ticket.created_at)}</span>
@@ -330,7 +551,8 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         )}
       </CardContent>
     </Card>
-  );
+    );
+  };
 
   if (isLoading) {
     return (
@@ -375,48 +597,170 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         </div>
         
         {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
-            <Input
-              placeholder="Search tickets..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
-              style={{ paddingLeft: '2.75rem' }}
-            />
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
+              <Input
+                placeholder="Search tickets..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+                style={{ paddingLeft: '2.75rem' }}
+              />
+            </div>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectValue placeholder="Filter by status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="neu">Neu</SelectItem>
+                <SelectItem value="ausstehend">Ausstehend</SelectItem>
+                <SelectItem value="warten auf rückmeldung vom ticketbenutzer">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
+                <SelectItem value="warten auf rückmeldung (extern)">Warten auf Rückmeldung (Extern)</SelectItem>
+                <SelectItem value="terminiert">Terminiert</SelectItem>
+                <SelectItem value="abgeschlossen">Abgeschlossen</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectValue placeholder="Filter by priority" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Priorities</SelectItem>
+                <SelectItem value="very_high">Very High</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="normal">Normal</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <ArrowUpDown className="h-4 w-4 mr-2" />
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="date-desc">Date (Newest)</SelectItem>
+                <SelectItem value="date-asc">Date (Oldest)</SelectItem>
+                <SelectItem value="priority-high">Priority (High)</SelectItem>
+                <SelectItem value="priority-low">Priority (Low)</SelectItem>
+                <SelectItem value="id-desc">ID (Highest)</SelectItem>
+                <SelectItem value="id-asc">ID (Lowest)</SelectItem>
+                <SelectItem value="company-asc">Company (A-Z)</SelectItem>
+                <SelectItem value="company-desc">Company (Z-A)</SelectItem>
+                <SelectItem value="status-asc">Status (A-Z)</SelectItem>
+                <SelectItem value="status-desc">Status (Z-A)</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              className="flex items-center gap-2"
+            >
+              <Filter className="h-4 w-4" />
+              Advanced
+            </Button>
           </div>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-full sm:w-[180px]">
-              <SelectValue placeholder="Filter by status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              <SelectItem value="neu">Neu</SelectItem>
-              <SelectItem value="ausstehend">Ausstehend</SelectItem>
-              <SelectItem value="warten auf rückmeldung vom ticketbenutzer">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
-              <SelectItem value="warten auf rückmeldung (extern)">Warten auf Rückmeldung (Extern)</SelectItem>
-              <SelectItem value="terminiert">Terminiert</SelectItem>
-              <SelectItem value="abgeschlossen">Abgeschlossen</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-            <SelectTrigger className="w-full sm:w-[180px]">
-              <SelectValue placeholder="Filter by priority" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Priorities</SelectItem>
-              <SelectItem value="very_high">Very High</SelectItem>
-              <SelectItem value="high">High</SelectItem>
-              <SelectItem value="normal">Normal</SelectItem>
-            </SelectContent>
-          </Select>
+
+          {/* Advanced Filters */}
+          {showAdvancedFilters && (
+            <Card className="p-4 bg-muted/50">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Label className="font-medium">Advanced Filters</Label>
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
+                    Clear All
+                  </Button>
+                </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="customer-filter">Customer</Label>
+                    <div className="relative" ref={customerDropdownRef}>
+                      <Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
+                      <Input
+                        id="customer-filter"
+                        placeholder="Search customers..."
+                        value={customerSearchTerm}
+                        onChange={(e) => {
+                          setCustomerSearchTerm(e.target.value);
+                          setShowCustomerDropdown(true);
+                        }}
+                        onFocus={() => setShowCustomerDropdown(true)}
+                        className="pl-10 pr-8"
+                        style={{ paddingLeft: '2.75rem' }}
+                      />
+                      {customerFilter && (
+                        <button
+                          onClick={handleCustomerClear}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                        >
+                          ×
+                        </button>
+                      )}
+                      {showCustomerDropdown && filteredCustomers.length > 0 && (
+                        <Card className="absolute top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto z-50 shadow-lg">
+                          <CardContent className="p-0">
+                            {filteredCustomers.slice(0, 10).map((customer) => (
+                              <button
+                                key={customer.id}
+                                onClick={() => handleCustomerSelect(customer)}
+                                className="w-full text-left px-3 py-2 hover:bg-accent hover:text-accent-foreground border-b last:border-b-0 transition-colors"
+                              >
+                                <div className="font-medium">{customer.name}</div>
+                                {customer.number && (
+                                  <div className="text-sm text-muted-foreground">#{customer.number}</div>
+                                )}
+                              </button>
+                            ))}
+                            {filteredCustomers.length > 10 && (
+                              <div className="px-3 py-2 text-sm text-muted-foreground border-t">
+                                {filteredCustomers.length - 10} more customers...
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label htmlFor="date-from" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4" />
+                      Date From
+                    </Label>
+                    <Input
+                      id="date-from"
+                      type="date"
+                      value={dateFromFilter}
+                      onChange={(e) => setDateFromFilter(e.target.value)}
+                      className="block w-full"
+                    />
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label htmlFor="date-to" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4" />
+                      Date To
+                    </Label>
+                    <Input
+                      id="date-to"
+                      type="date"
+                      value={dateToFilter}
+                      onChange={(e) => setDateToFilter(e.target.value)}
+                      className="block w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
       </div>
 
       {/* Ticket Tabs */}
       <Tabs defaultValue="my" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 h-11 bg-muted/50 backdrop-blur-sm">
+        <TabsList className="grid w-full grid-cols-3 h-11">
           <TabsTrigger 
             value="my" 
             className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
@@ -425,7 +769,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             My Tickets
             {tickets.my_tickets.length > 0 && (
               <Badge 
-                variant="secondary" 
+                variant="outline" 
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
                 {getFilteredTickets(tickets.my_tickets).length}
@@ -440,7 +784,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             New Tickets
             {tickets.new_tickets.length > 0 && (
               <Badge 
-                variant="secondary" 
+                variant="outline" 
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
                 {getFilteredTickets(tickets.new_tickets).length}
@@ -455,7 +799,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             All Tickets
             {tickets.all_tickets.length > 0 && (
               <Badge 
-                variant="secondary" 
+                variant="outline" 
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
                 {getFilteredTickets(tickets.all_tickets).length}

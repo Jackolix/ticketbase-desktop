@@ -11,6 +11,7 @@ import { TicketList } from "./components/tickets/TicketList";
 import { TicketDetail } from "./components/tickets/TicketDetail";
 import { NewTicketForm } from "./components/tickets/NewTicketForm";
 import { Settings } from "./components/settings/Settings";
+import { Reports } from "./components/reports/Reports";
 import { TicketWindow } from "./components/tickets/TicketWindow";
 import { UpdateNotification } from "./components/ui/UpdateNotification";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
@@ -184,7 +185,7 @@ function AppContent() {
       case "today":
         return <div><h1 className="text-3xl font-bold">Today's Schedule</h1><p className="text-muted-foreground mt-2">Coming soon...</p></div>;
       case "reports":
-        return <div><h1 className="text-3xl font-bold">Reports</h1><p className="text-muted-foreground mt-2">Coming soon...</p></div>;
+        return <Reports />;
       default:
         return <Dashboard onTicketSelect={handleTicketSelect} />;
     }
