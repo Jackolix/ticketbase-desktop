@@ -354,27 +354,24 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     <div className="space-y-6">
       {/* Header */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">Tickets</h1>
-          <div className="flex items-center gap-2">
-            {lastUpdated && (
-              <span className="text-sm text-muted-foreground">
-                Last updated: {lastUpdated.toLocaleTimeString()}
-              </span>
+        <div className="flex items-center justify-end">
+          {lastUpdated && (
+            <span className="text-sm text-muted-foreground mr-2">
+              Last updated: {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refreshTickets}
+            disabled={isRefreshing}
+          >
+            {isRefreshing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={refreshTickets}
-              disabled={isRefreshing}
-            >
-              {isRefreshing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-            </Button>
-          </div>
+          </Button>
         </div>
         
         {/* Filters */}

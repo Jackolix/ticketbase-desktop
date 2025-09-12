@@ -14,7 +14,11 @@ import {
   Building
 } from 'lucide-react';
 
-export function Dashboard() {
+interface DashboardProps {
+  onTicketSelect: (ticket: Ticket) => void;
+}
+
+export function Dashboard({ onTicketSelect }: DashboardProps) {
   const { user } = useAuth();
   const [tickets, setTickets] = useState<{
     new_tickets: Ticket[];
@@ -89,7 +93,6 @@ export function Dashboard() {
     <div className="space-y-6">
       {/* Header */}
       <div className="space-y-2">
-        <h1 className="text-3xl font-bold">Dashboard</h1>
         <p className="text-muted-foreground">
           Welcome back, {user?.name}. Here's your ticket overview.
         </p>
@@ -178,7 +181,7 @@ export function Dashboard() {
                     </span>
                   </div>
                 </div>
-                <Button size="sm" variant="outline">
+                <Button size="sm" variant="outline" onClick={() => onTicketSelect(ticket)}>
                   View
                 </Button>
               </div>
@@ -224,8 +227,8 @@ export function Dashboard() {
                     </span>
                   </div>
                 </div>
-                <Button size="sm">
-                  Assign
+                <Button size="sm" onClick={() => onTicketSelect(ticket)}>
+                  View
                 </Button>
               </div>
             ))}

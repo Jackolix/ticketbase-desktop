@@ -93,7 +93,7 @@ function AppContent() {
         };
         
         setSelectedTicket(transformedTicket);
-        setCurrentView("ticket-detail");
+        setCurrentView("tickets");
       } else {
         console.error('Failed to load ticket:', response);
         // Fallback to dashboard if ticket not found
@@ -121,7 +121,7 @@ function AppContent() {
 
   const handleTicketSelect = (ticket: Ticket) => {
     setSelectedTicket(ticket);
-    setCurrentView("ticket-detail");
+    setCurrentView("tickets");
   };
 
   const handleTicketBack = () => {
@@ -167,19 +167,14 @@ function AppContent() {
   };
 
   const renderContent = () => {
-    if (selectedTicket || currentView === "ticket-detail") {
-      return selectedTicket ? (
-        <TicketDetail ticket={selectedTicket} onBack={handleTicketBack} />
-      ) : (
-        <div className="flex items-center justify-center h-64">
-          <p className="text-muted-foreground">Ticket not found</p>
-        </div>
-      );
+    // If a ticket is selected, always show the ticket detail view
+    if (selectedTicket) {
+      return <TicketDetail ticket={selectedTicket} onBack={handleTicketBack} />;
     }
 
     switch (currentView) {
       case "dashboard":
-        return <Dashboard />;
+        return <Dashboard onTicketSelect={handleTicketSelect} />;
       case "tickets":
         return <TicketList onTicketSelect={handleTicketSelect} />;
       case "new-ticket":
@@ -191,7 +186,7 @@ function AppContent() {
       case "reports":
         return <div><h1 className="text-3xl font-bold">Reports</h1><p className="text-muted-foreground mt-2">Coming soon...</p></div>;
       default:
-        return <Dashboard />;
+        return <Dashboard onTicketSelect={handleTicketSelect} />;
     }
   };
 
