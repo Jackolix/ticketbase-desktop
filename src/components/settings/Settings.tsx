@@ -9,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUpdater } from '@/contexts/UpdaterContext';
 import { apiClient } from '@/lib/api';
+import { openWebUIClient } from '@/lib/openwebui';
+import type { OpenWebUISettings } from '@/types/openwebui';
 import { 
   User, 
   Mail, 
@@ -18,7 +20,8 @@ import {
   RefreshCw,
   Loader2,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Brain
 } from 'lucide-react';
 
 export function Settings() {
@@ -38,16 +41,33 @@ export function Settings() {
     new_message_mail: false,
     new_forward_mail: false
   });
+  const [aiSettings, setAiSettings] = useState<OpenWebUISettings>({
+    baseUrl: '',
+    apiKey: '',
+    defaultModel: 'llama3.1',
+    enabled: false
+  });
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
   
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [isLoadingPassword, setIsLoadingPassword] = useState(false);
   const [isLoadingMail, setIsLoadingMail] = useState(false);
+  const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     fetchMailSettings();
+    loadAiSettings();
   }, [user]);
+
+  const loadAiSettings = () => {
+    const settings = openWebUIClient.getSettings();
+    if (settings) {
+      setAiSettings(settings);
+    }
+  };
 
   const fetchMailSettings = async () => {
     if (!user) return;
@@ -148,6 +168,52 @@ export function Settings() {
     }
   };
 
+  const testAiConnection = async () => {
+    if (!aiSettings.baseUrl || !aiSettings.apiKey) {
+      setErrorMessage('Please enter both API URL and API Key');
+      return;
+    }
+
+    setIsTestingConnection(true);
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    try {
+      openWebUIClient.updateSettings(aiSettings);
+      const models = await openWebUIClient.getModels();
+      const modelIds = models.map(m => m.id);
+      setAvailableModels(modelIds);
+      
+      // If current default model is not in the list, update to first available
+      if (modelIds.length > 0 && !modelIds.includes(aiSettings.defaultModel)) {
+        setAiSettings(prev => ({ ...prev, defaultModel: modelIds[0] }));
+      }
+      
+      setSuccessMessage(`Connection successful! Found ${models.length} models.`);
+    } catch (error) {
+      setErrorMessage(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
+  const handleAiSettingsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    setIsLoadingAi(true);
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    try {
+      openWebUIClient.updateSettings(aiSettings);
+      setSuccessMessage('AI settings saved successfully');
+    } catch (error) {
+      setErrorMessage('Failed to save AI settings');
+    } finally {
+      setIsLoadingAi(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -172,7 +238,7 @@ export function Settings() {
       )}
 
       <Tabs defaultValue="profile" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4 h-11 bg-muted/50 backdrop-blur-sm">
+        <TabsList className="grid w-full grid-cols-5 h-11 bg-muted/50 backdrop-blur-sm">
           <TabsTrigger 
             value="profile" 
             className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
@@ -193,6 +259,13 @@ export function Settings() {
           >
             <Bell className="w-4 h-4 mr-2" />
             Notifications
+          </TabsTrigger>
+          <TabsTrigger 
+            value="ai" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
+          >
+            <Brain className="w-4 h-4 mr-2" />
+            AI Assistant
           </TabsTrigger>
           <TabsTrigger 
             value="about" 
@@ -424,6 +497,119 @@ export function Settings() {
                 >
                   Enable All Notifications
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="ai">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Brain className="h-5 w-5" />
+                AI Assistant
+              </CardTitle>
+              <CardDescription>
+                Configure your OpenWebUI connection for AI-powered features like ticket summarization and response suggestions.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleAiSettingsSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="aiUrl">OpenWebUI API URL</Label>
+                  <Input
+                    id="aiUrl"
+                    type="url"
+                    value={aiSettings.baseUrl}
+                    onChange={(e) => setAiSettings(prev => ({ ...prev, baseUrl: e.target.value }))}
+                    placeholder="https://your-openwebui.com/api/v1"
+                    disabled={isLoadingAi}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter your OpenWebUI instance URL (e.g., https://openwebui.example.com/api/v1)
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="aiKey">API Key</Label>
+                  <Input
+                    id="aiKey"
+                    type="password"
+                    value={aiSettings.apiKey}
+                    onChange={(e) => setAiSettings(prev => ({ ...prev, apiKey: e.target.value }))}
+                    placeholder="Your API key"
+                    disabled={isLoadingAi}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Get your API key from your OpenWebUI Settings → Account
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={testAiConnection}
+                    disabled={isTestingConnection || !aiSettings.baseUrl || !aiSettings.apiKey}
+                  >
+                    {isTestingConnection ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Testing...
+                      </>
+                    ) : (
+                      'Test Connection'
+                    )}
+                  </Button>
+                </div>
+
+                {availableModels.length > 0 && (
+                  <div className="space-y-2">
+                    <Label htmlFor="defaultModel">Default Model</Label>
+                    <select
+                      id="defaultModel"
+                      value={aiSettings.defaultModel}
+                      onChange={(e) => setAiSettings(prev => ({ ...prev, defaultModel: e.target.value }))}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isLoadingAi}
+                    >
+                      {availableModels.map(model => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="aiEnabled"
+                    checked={aiSettings.enabled}
+                    onCheckedChange={(checked) => setAiSettings(prev => ({ ...prev, enabled: checked }))}
+                    disabled={isLoadingAi}
+                  />
+                  <Label htmlFor="aiEnabled">Enable AI Assistant</Label>
+                </div>
+
+                <Button type="submit" disabled={isLoadingAi}>
+                  {isLoadingAi ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    'Save AI Settings'
+                  )}
+                </Button>
+              </form>
+
+              <div className="mt-6 pt-6 border-t">
+                <h4 className="text-sm font-medium mb-2">AI Features</h4>
+                <ul className="text-sm text-muted-foreground space-y-1">
+                  <li>• Automatic ticket summarization</li>
+                  <li>• Smart priority and category suggestions</li>
+                  <li>• AI-powered response suggestions</li>
+                  <li>• Intelligent ticket categorization</li>
+                </ul>
               </div>
             </CardContent>
           </Card>

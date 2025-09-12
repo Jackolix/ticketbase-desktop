@@ -17,6 +17,7 @@ import {
   CheckCircle,
   Loader2
 } from 'lucide-react';
+import { TicketAIAssistant } from '@/components/ai/TicketAIAssistant';
 
 export function NewTicketForm() {
   const { user } = useAuth();
@@ -126,6 +127,13 @@ export function NewTicketForm() {
     setSuccess(false);
   };
 
+  const handleAICategory = (_category: string, priority: string) => {
+    setFormData(prev => ({
+      ...prev,
+      priority: priority.charAt(0).toUpperCase() + priority.slice(1)
+    }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -214,16 +222,18 @@ export function NewTicketForm() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Plus className="h-5 w-5" />
-            New Ticket Details
-          </CardTitle>
-          <CardDescription>
-            Provide as much detail as possible to help resolve your issue quickly.
-          </CardDescription>
-        </CardHeader>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Plus className="h-5 w-5" />
+                New Ticket Details
+              </CardTitle>
+              <CardDescription>
+                Provide as much detail as possible to help resolve your issue quickly.
+              </CardDescription>
+            </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
             {error && (
@@ -411,6 +421,15 @@ export function NewTicketForm() {
           </form>
         </CardContent>
       </Card>
+        </div>
+
+        <div className="lg:col-span-1">
+          <TicketAIAssistant
+            ticketDescription={formData.description}
+            onCategoryAccept={handleAICategory}
+          />
+        </div>
+      </div>
     </div>
   );
 }

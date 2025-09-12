@@ -30,6 +30,7 @@ import {
   History,
   ListTodo
 } from 'lucide-react';
+import { TicketAIAssistant } from '@/components/ai/TicketAIAssistant';
 
 interface TicketDetailProps {
   ticket: Ticket;
@@ -113,6 +114,10 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     } catch (error) {
       console.error('Failed to toggle todo:', error);
     }
+  };
+
+  const handleAISuggestion = (suggestion: string) => {
+    setNewHistoryText(suggestion);
   };
 
   const handleAddHistory = async () => {
@@ -619,6 +624,15 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
               </div>
             </CardContent>
           </Card>
+
+          {/* AI Assistant */}
+          <TicketAIAssistant
+            ticketDescription={getTicketDescription(ticket)}
+            ticketHistory={ticketHistory.map(h => h.technician_reply)}
+            onSuggestionAccept={handleAISuggestion}
+            currentText={newHistoryText}
+            onTextImprove={setNewHistoryText}
+          />
         </div>
       </div>
     </div>
