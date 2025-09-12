@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import "./App.css";
-import { check } from "@tauri-apps/plugin-updater";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider } from "./contexts/TicketsContext";
+import { UpdaterProvider } from "./contexts/UpdaterContext";
 import { CustomLoginForm } from "./components/auth/CustomLoginForm";
 import { TicketAppSidebar } from "./components/TicketAppSidebar";
 import { Dashboard } from "./components/dashboard/Dashboard";
@@ -12,6 +12,7 @@ import { TicketDetail } from "./components/tickets/TicketDetail";
 import { NewTicketForm } from "./components/tickets/NewTicketForm";
 import { Settings } from "./components/settings/Settings";
 import { TicketWindow } from "./components/tickets/TicketWindow";
+import { UpdateNotification } from "./components/ui/UpdateNotification";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { 
@@ -215,28 +216,12 @@ function AppContent() {
           {renderContent()}
         </div>
       </SidebarInset>
+      <UpdateNotification />
     </SidebarProvider>
   );
 }
 
 function App() {
-  // Check for updates when app starts
-  useEffect(() => {
-    const checkForUpdates = async () => {
-      try {
-        const update = await check();
-        if (update) {
-          console.log('Update available:', update.version);
-          // Install update automatically (you can customize this behavior)
-          await update.downloadAndInstall();
-        }
-      } catch (error) {
-        console.error('Update check failed:', error);
-      }
-    };
-
-    checkForUpdates();
-  }, []);
 
   // Check if this is a ticket window (has ticketWindow=true query parameter)
   const isTicketWindow = new URLSearchParams(window.location.search).get('ticketWindow') === 'true';
@@ -249,22 +234,26 @@ function App() {
   if (isTicketWindow && ticketId) {
     return (
       <ThemeProvider>
-        <AuthProvider>
-          <TicketsProvider>
-            <TicketWindow ticketId={ticketId} />
-          </TicketsProvider>
-        </AuthProvider>
+        <UpdaterProvider>
+          <AuthProvider>
+            <TicketsProvider>
+              <TicketWindow ticketId={ticketId} />
+            </TicketsProvider>
+          </AuthProvider>
+        </UpdaterProvider>
       </ThemeProvider>
     );
   }
 
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <TicketsProvider>
-          <AppContent />
-        </TicketsProvider>
-      </AuthProvider>
+      <UpdaterProvider>
+        <AuthProvider>
+          <TicketsProvider>
+            <AppContent />
+          </TicketsProvider>
+        </AuthProvider>
+      </UpdaterProvider>
     </ThemeProvider>
   );
 }

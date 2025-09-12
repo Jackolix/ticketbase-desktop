@@ -7,12 +7,15 @@ import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
+import { useUpdater } from '@/contexts/UpdaterContext';
 import { apiClient } from '@/lib/api';
 import { 
   User, 
   Mail, 
   Lock, 
   Bell,
+  Info,
+  RefreshCw,
   Loader2,
   CheckCircle,
   AlertCircle
@@ -20,6 +23,7 @@ import {
 
 export function Settings() {
   const { user } = useAuth();
+  const { currentVersion, isCheckingForUpdate, checkForUpdate } = useUpdater();
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     phone: user?.phone || ''
@@ -168,7 +172,7 @@ export function Settings() {
       )}
 
       <Tabs defaultValue="profile" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 h-11 bg-muted/50 backdrop-blur-sm">
+        <TabsList className="grid w-full grid-cols-4 h-11 bg-muted/50 backdrop-blur-sm">
           <TabsTrigger 
             value="profile" 
             className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
@@ -189,6 +193,13 @@ export function Settings() {
           >
             <Bell className="w-4 h-4 mr-2" />
             Notifications
+          </TabsTrigger>
+          <TabsTrigger 
+            value="about" 
+            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
+          >
+            <Info className="w-4 h-4 mr-2" />
+            About
           </TabsTrigger>
         </TabsList>
 
@@ -413,6 +424,68 @@ export function Settings() {
                 >
                   Enable All Notifications
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="about">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Info className="h-5 w-5" />
+                About
+              </CardTitle>
+              <CardDescription>
+                Application information and updates
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 bg-muted/20 rounded-lg">
+                  <div>
+                    <Label className="text-base font-medium">Current Version</Label>
+                    <p className="text-2xl font-semibold text-primary">
+                      {currentVersion || 'Loading...'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <Label className="text-base font-medium">Update Management</Label>
+                  <p className="text-sm text-muted-foreground">
+                    The application automatically checks for updates every 30 minutes. When an update is available, you'll see a notification in the bottom-right corner.
+                  </p>
+                  <Button
+                    onClick={checkForUpdate}
+                    disabled={isCheckingForUpdate}
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                  >
+                    {isCheckingForUpdate ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Checking...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Check for Updates
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                <div className="pt-4 border-t">
+                  <div className="space-y-2">
+                    <Label className="text-base font-medium">Application Info</Label>
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <p><strong>Name:</strong> Ticketbase Desktop</p>
+                      <p><strong>Built with:</strong> Tauri + React + TypeScript</p>
+                      <p><strong>Update Source:</strong> GitHub Releases</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
