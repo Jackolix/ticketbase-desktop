@@ -63,6 +63,19 @@ jobs:
         # If you don't have `beforeBuildCommand` configured you may want to build your frontend here too.
         run: npm install # change this to npm or pnpm depending on which one you use.
 
+      - name: Update version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # Extract version from tag (remove 'v' prefix if present)
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "Updating version to: $VERSION"
+          
+          # Update package.json version
+          npm version --no-git-tag-version $VERSION
+          
+          # Update tauri.conf.json version using our script
+          APP_VERSION=$VERSION npm run update-config
+
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -75,6 +88,8 @@ jobs:
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || '' }}
           releaseDraft: false
           prerelease: false
+          updaterJsonPreferNsis: true
+          updaterJsonKeepUniversal: true
           releaseBody: |
             ## What's Changed
             

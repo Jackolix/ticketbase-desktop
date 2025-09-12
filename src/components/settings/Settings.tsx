@@ -23,7 +23,7 @@ import {
 
 export function Settings() {
   const { user } = useAuth();
-  const { currentVersion, isCheckingForUpdate, checkForUpdate } = useUpdater();
+  const { currentVersion, isCheckingForUpdate, checkForUpdate, lastError, clearError } = useUpdater();
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     phone: user?.phone || ''
@@ -474,6 +474,23 @@ export function Settings() {
                       </>
                     )}
                   </Button>
+
+                  {lastError && (
+                    <Alert variant="destructive" className="mt-3">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription className="flex items-center justify-between">
+                        <span>{lastError}</span>
+                        <Button
+                          onClick={clearError}
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 ml-2"
+                        >
+                          Dismiss
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+                  )}
                 </div>
 
                 <div className="pt-4 border-t">

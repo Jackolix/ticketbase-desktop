@@ -10,10 +10,12 @@ interface UpdaterContextType {
   isUpdateDownloaded: boolean;
   isInstalling: boolean;
   downloadProgress: number;
+  lastError: string | null;
   checkForUpdate: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   dismissUpdate: () => void;
+  clearError: () => void;
 }
 
 const UpdaterContext = createContext<UpdaterContextType | undefined>(undefined);
@@ -37,6 +39,7 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   const [isUpdateDownloaded, setIsUpdateDownloaded] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   // Get current app version on mount
   useEffect(() => {
@@ -60,6 +63,7 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
 
       try {
         setIsCheckingForUpdate(true);
+        setLastError(null);
         const update = await check();
         
         if (update && (!availableUpdate || update.version !== availableUpdate.version)) {
@@ -68,19 +72,30 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
           setIsUpdateDownloaded(false);
         }
       } catch (error) {
-        console.error('Update check failed:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        console.error('Update check failed:', errorMessage);
+        
+        // Don't show error for development or missing latest.json
+        if (errorMessage.includes('Could not fetch a valid release JSON')) {
+          console.log('Note: latest.json not found. This is normal if no releases with updater support have been published yet.');
+        } else {
+          setLastError(`Update check failed: ${errorMessage}`);
+        }
       } finally {
         setIsCheckingForUpdate(false);
       }
     };
 
-    // Check immediately on mount
-    checkForUpdates();
+    // Skip automatic checks in development
+    const isDevelopment = import.meta.env.DEV;
+    if (!isDevelopment) {
+      // Check immediately on mount
+      checkForUpdates();
 
-    // Then check every 30 minutes
-    const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
-
-    return () => clearInterval(interval);
+      // Then check every 30 minutes
+      const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
+      return () => clearInterval(interval);
+    }
   }, [availableUpdate, isCheckingForUpdate, isInstalling]);
 
   const checkForUpdate = async () => {
@@ -88,6 +103,7 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
 
     try {
       setIsCheckingForUpdate(true);
+      setLastError(null);
       const update = await check();
       
       if (update) {
@@ -99,10 +115,21 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
         setIsUpdateDownloaded(false);
       }
     } catch (error) {
-      console.error('Update check failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      console.error('Update check failed:', errorMessage);
+      
+      if (errorMessage.includes('Could not fetch a valid release JSON')) {
+        setLastError('Update check failed: No updates available yet. The latest.json file will be available after the next release is published with updater support.');
+      } else {
+        setLastError(`Update check failed: ${errorMessage}`);
+      }
     } finally {
       setIsCheckingForUpdate(false);
     }
+  };
+
+  const clearError = () => {
+    setLastError(null);
   };
 
   const downloadUpdate = async () => {
@@ -170,10 +197,12 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
     isUpdateDownloaded,
     isInstalling,
     downloadProgress,
+    lastError,
     checkForUpdate,
     downloadUpdate,
     installUpdate,
     dismissUpdate,
+    clearError,
   };
 
   return (

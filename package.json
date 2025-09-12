@@ -1,13 +1,15 @@
 {
   "name": "ticketsystem-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.6.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "update-config": "node scripts/update-config.js",
+    "prebuild": "npm run update-config"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.1",
