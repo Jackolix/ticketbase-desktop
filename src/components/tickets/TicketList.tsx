@@ -58,7 +58,19 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     my_tickets: Ticket[];
     all_tickets: Ticket[];
   } | null>(null);
+  const [isLoadingAdvancedSearch, setIsLoadingAdvancedSearch] = useState(false);
+  const [hasAttemptedCacheRestore, setHasAttemptedCacheRestore] = useState(false);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+
+  // In-memory cache for large datasets that can't fit in sessionStorage
+  const allTicketsCacheRef = useRef<{
+    tickets: {
+      new_tickets: Ticket[];
+      my_tickets: Ticket[];
+      all_tickets: Ticket[];
+    };
+    timestamp: number;
+  } | null>(null);
 
   // Save search state to sessionStorage
   const saveSearchState = () => {
@@ -67,12 +79,97 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       statusFilter,
       priorityFilter,
       customerFilter,
+      customerSearchTerm,
       dateFromFilter,
       dateToFilter,
       showAdvancedFilters,
       sortBy
     };
     sessionStorage.setItem('ticketSearchState', JSON.stringify(searchState));
+  };
+
+  // Cache management for expensive search results
+  const saveAllTicketsToCache = (tickets: {
+    new_tickets: Ticket[];
+    my_tickets: Ticket[];
+    all_tickets: Ticket[];
+  }) => {
+    const cacheData = {
+      tickets,
+      timestamp: Date.now()
+    };
+
+    // Always save to in-memory cache (primary)
+    allTicketsCacheRef.current = cacheData;
+
+    // Try to save to sessionStorage as backup (may fail due to quota)
+    try {
+      // Store a lightweight marker instead of full data
+      const marker = {
+        hasCache: true,
+        timestamp: Date.now(),
+        ticketCount: tickets.new_tickets.length + tickets.my_tickets.length + tickets.all_tickets.length
+      };
+      sessionStorage.setItem('allTicketsForSearchCache', JSON.stringify(marker));
+    } catch (error) {
+      console.warn('Failed to save cache marker to sessionStorage:', error);
+      // Continue without sessionStorage - in-memory cache will still work
+    }
+  };
+
+  const loadAllTicketsFromCache = () => {
+    // First try in-memory cache (most reliable)
+    if (allTicketsCacheRef.current) {
+      const { tickets, timestamp } = allTicketsCacheRef.current;
+      // Cache expires after 5 minutes
+      if (Date.now() - timestamp < 5 * 60 * 1000) {
+        console.log('Loading tickets from in-memory cache');
+        return tickets;
+      } else {
+        // Clear expired cache
+        allTicketsCacheRef.current = null;
+      }
+    }
+
+    // Fallback: check if sessionStorage indicates we had cached data
+    try {
+      const cached = sessionStorage.getItem('allTicketsForSearchCache');
+      if (cached) {
+        const marker = JSON.parse(cached);
+        if (marker.hasCache && Date.now() - marker.timestamp < 5 * 60 * 1000) {
+          console.log('Cache marker found but in-memory cache is empty - cache was lost during navigation');
+          // We know there was cached data but it's no longer available
+          return null;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load cache marker:', error);
+    }
+
+    return null;
+  };
+
+  const clearAllTicketsCache = () => {
+    allTicketsCacheRef.current = null;
+    try {
+      sessionStorage.removeItem('allTicketsForSearchCache');
+    } catch (error) {
+      console.warn('Failed to clear sessionStorage cache:', error);
+    }
+  };
+
+  // Load advanced search for customer (used when restoring state)
+  const loadAdvancedSearchForCustomer = async () => {
+    setIsLoadingAdvancedSearch(true);
+    try {
+      const allTickets = await loadAllTicketsForSearch();
+      setAllTicketsForSearch(allTickets);
+      saveAllTicketsToCache(allTickets);
+    } catch (error) {
+      console.error('Failed to load advanced search for customer:', error);
+    } finally {
+      setIsLoadingAdvancedSearch(false);
+    }
   };
 
   // Restore search state from sessionStorage
@@ -85,20 +182,61 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         setStatusFilter(state.statusFilter || 'all');
         setPriorityFilter(state.priorityFilter || 'all');
         setCustomerFilter(state.customerFilter || '');
+        setCustomerSearchTerm(state.customerSearchTerm || '');
         setDateFromFilter(state.dateFromFilter || '');
         setDateToFilter(state.dateToFilter || '');
-        setShowAdvancedFilters(state.showAdvancedFilters || false);
+        setShowAdvancedFilters(state.showAdvancedFilters || !!state.customerFilter || !!state.dateFromFilter || !!state.dateToFilter);
         setSortBy(state.sortBy || 'date-desc');
+
+        // Note: Cached tickets will be restored in the customer useEffect after customers load
       } catch (error) {
         console.error('Failed to restore search state:', error);
       }
     }
   }, []);
 
+  // Restore customer search term and cached tickets after customers are loaded
+  useEffect(() => {
+    if (customers.length > 0 && customerFilter && !hasAttemptedCacheRestore) {
+      console.log('Attempting to restore customer state:', { customerFilter, customerSearchTerm, hasAllTickets: !!allTicketsForSearch });
+
+      let needsAdvancedSearch = false;
+
+      // Restore customer search term if not already set
+      if (!customerSearchTerm) {
+        const selectedCustomer = customers.find(c => c.id.toString() === customerFilter);
+        if (selectedCustomer) {
+          console.log('Restoring customer search term:', selectedCustomer.name);
+          setCustomerSearchTerm(selectedCustomer.name);
+        }
+      }
+
+      // Restore cached tickets if customer filter is active but we don't have tickets loaded
+      if (!allTicketsForSearch) {
+        const cachedTickets = loadAllTicketsFromCache();
+        if (cachedTickets) {
+          console.log('Restoring cached tickets:', cachedTickets);
+          setAllTicketsForSearch(cachedTickets);
+        } else {
+          console.log('No cached tickets found - will need to reload advanced search');
+          needsAdvancedSearch = true;
+        }
+      }
+
+      setHasAttemptedCacheRestore(true);
+
+      // Load advanced search after setting the flag to prevent multiple calls
+      if (needsAdvancedSearch) {
+        console.log('Auto-reloading advanced search for customer filter:', customerFilter);
+        loadAdvancedSearchForCustomer();
+      }
+    }
+  }, [customers, customerFilter, customerSearchTerm, hasAttemptedCacheRestore]); // Removed allTicketsForSearch from deps
+
   // Save search state whenever filters change
   useEffect(() => {
     saveSearchState();
-  }, [searchTerm, statusFilter, priorityFilter, customerFilter, dateFromFilter, dateToFilter, showAdvancedFilters, sortBy]);
+  }, [searchTerm, statusFilter, priorityFilter, customerFilter, customerSearchTerm, dateFromFilter, dateToFilter, showAdvancedFilters, sortBy]);
 
   // Load customers for filtering
   useEffect(() => {
@@ -149,20 +287,33 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     setDateToFilter('');
     setSortBy('date-desc');
     setAllTicketsForSearch(null); // Clear all tickets cache
+    clearAllTicketsCache(); // Clear persistent cache
+    setHasAttemptedCacheRestore(false); // Reset cache restore flag
   };
 
   const handleCustomerSelect = async (customer: Company) => {
     setCustomerFilter(customer.id.toString());
     setCustomerSearchTerm(customer.name);
     setShowCustomerDropdown(false);
-    
+
     // Load all tickets for better search results when customer filter is applied
     if (!allTicketsForSearch) {
-      try {
-        const allTickets = await loadAllTicketsForSearch();
-        setAllTicketsForSearch(allTickets);
-      } catch (error) {
-        console.error('Failed to load all tickets for search:', error);
+      // First try to load from cache
+      const cachedTickets = loadAllTicketsFromCache();
+      if (cachedTickets) {
+        setAllTicketsForSearch(cachedTickets);
+      } else {
+        // If no cache, fetch fresh data with loading indicator
+        setIsLoadingAdvancedSearch(true);
+        try {
+          const allTickets = await loadAllTicketsForSearch();
+          setAllTicketsForSearch(allTickets);
+          saveAllTicketsToCache(allTickets); // Cache the results
+        } catch (error) {
+          console.error('Failed to load all tickets for search:', error);
+        } finally {
+          setIsLoadingAdvancedSearch(false);
+        }
       }
     }
   };
@@ -173,6 +324,8 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     setShowCustomerDropdown(false);
     // Clear all tickets cache when no longer needed
     setAllTicketsForSearch(null);
+    clearAllTicketsCache(); // Clear persistent cache
+    setHasAttemptedCacheRestore(false); // Reset cache restore flag
   };
 
   // Filter customers based on search term
@@ -422,27 +575,40 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     if (!dateString) return 'No date';
     try {
       // Handle DD-MM-YYYY HH:mm format
-      const match = dateString.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
-      if (match) {
-        const [, day, month, year, hour, minute] = match;
+      const matchWithTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
+      if (matchWithTime) {
+        const [, day, month, year, hour, minute] = matchWithTime;
         const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(minute));
         if (!isNaN(date.getTime())) {
-          return date.toLocaleDateString(undefined, { 
-            month: 'short', 
+          return date.toLocaleDateString(undefined, {
+            month: 'short',
             day: 'numeric',
             hour: '2-digit',
             minute: '2-digit'
           });
         }
       }
-      
+
+      // Handle DD-MM-YYYY format without time
+      const matchWithoutTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (matchWithoutTime) {
+        const [, day, month, year] = matchWithoutTime;
+        const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+        if (!isNaN(date.getTime())) {
+          return date.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric'
+          });
+        }
+      }
+
       // Fallback to standard date parsing
       const date = new Date(dateString);
       if (isNaN(date.getTime())) {
         return 'Invalid Date';
       }
-      return date.toLocaleDateString(undefined, { 
-        month: 'short', 
+      return date.toLocaleDateString(undefined, {
+        month: 'short',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
@@ -661,6 +827,19 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               Advanced
             </Button>
           </div>
+
+          {/* Advanced Search Loading */}
+          {isLoadingAdvancedSearch && (
+            <Card className="p-4 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                <div>
+                  <div className="font-medium text-blue-900 dark:text-blue-100">Loading comprehensive search results...</div>
+                  <div className="text-sm text-blue-700 dark:text-blue-300">This may take up to 20 seconds to complete. Results will be cached for future use.</div>
+                </div>
+              </div>
+            </Card>
+          )}
 
           {/* Advanced Filters */}
           {showAdvancedFilters && (
