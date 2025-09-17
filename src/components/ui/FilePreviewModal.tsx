@@ -16,6 +16,8 @@ import {
   Loader2,
   ExternalLink
 } from 'lucide-react';
+import { apiClient } from '@/lib/api';
+import { WindowManager } from '@/lib/windowManager';
 
 interface FilePreviewModalProps {
   isOpen: boolean;
@@ -102,8 +104,6 @@ export function FilePreviewModal({
     setError(null);
 
     try {
-      // Import the API client dynamically to avoid circular dependencies
-      const { apiClient } = await import('@/lib/api');
       const blob = await apiClient.downloadAttachment(ticketId, filename);
       setFileBlob(blob);
 
@@ -135,7 +135,6 @@ export function FilePreviewModal({
     if (!fileBlob) return;
 
     try {
-      const { WindowManager } = await import('@/lib/windowManager');
       await WindowManager.openFileExternally(filename, fileBlob);
       onClose(); // Close the modal after opening externally
     } catch (error) {

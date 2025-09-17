@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Ticket } from "./types/api";
 import { apiClient } from "./lib/api";
+import { WindowManager } from "./lib/windowManager";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -57,9 +58,7 @@ function AppContent() {
       checkUrlForTicket();
 
       // Clean up old temp files on app startup
-      import('./lib/windowManager').then(({ WindowManager }) => {
-        WindowManager.cleanupOldTempFiles();
-      });
+      WindowManager.cleanupOldTempFiles();
     }
   }, [isAuthenticated]);
 
@@ -79,9 +78,7 @@ function AppContent() {
   // Cleanup temp files on app shutdown
   useEffect(() => {
     const handleBeforeUnload = () => {
-      import('./lib/windowManager').then(({ WindowManager }) => {
-        WindowManager.cleanupAllTempFiles();
-      });
+      WindowManager.cleanupAllTempFiles();
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);

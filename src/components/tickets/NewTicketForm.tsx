@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuth } from '@/contexts/AuthContext';
@@ -33,11 +34,15 @@ export function NewTicketForm() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
-  
+
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [showCompanyDropdown, setShowCompanyDropdown] = useState(false);
+  const [companySearchTerm, setCompanySearchTerm] = useState('');
+
+  const companyDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchInitialData();
@@ -61,6 +66,20 @@ export function NewTicketForm() {
     }
   }, [formData.location_id]);
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (companyDropdownRef.current && !companyDropdownRef.current.contains(event.target as Node)) {
+        setShowCompanyDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
   const fetchInitialData = async () => {
     setIsLoading(true);
     try {
@@ -69,8 +88,8 @@ export function NewTicketForm() {
         apiClient.getTemplates()
       ]);
 
-      if (companiesResponse.status === 'success' && companiesResponse.data) {
-        setCompanies(companiesResponse.data.customers);
+      if (companiesResponse.status === 'success' && 'customers' in companiesResponse) {
+        setCompanies(companiesResponse.customers as Company[]);
       }
 
       if (templatesResponse.status === 'success' && templatesResponse.data) {
@@ -126,6 +145,41 @@ export function NewTicketForm() {
     setSuccess(false);
   };
 
+  const handleCompanySelect = (company: Company) => {
+    setFormData(prev => ({
+      ...prev,
+      company_id: company.id.toString(),
+      location_id: '', // Reset location when company changes
+      for_user_id: ''  // Reset user when company changes
+    }));
+    setCompanySearchTerm(company.name);
+    setShowCompanyDropdown(false);
+    setError('');
+    setSuccess(false);
+  };
+
+  const handleCompanyClear = () => {
+    setFormData(prev => ({
+      ...prev,
+      company_id: '',
+      location_id: '',
+      for_user_id: ''
+    }));
+    setCompanySearchTerm('');
+    setShowCompanyDropdown(false);
+    setLocations([]);
+    setUsers([]);
+  };
+
+  // Memoized filtered companies to prevent unnecessary re-filtering
+  const filteredCompanies = useMemo(() =>
+    companies.filter(company =>
+      company.name.toLowerCase().includes(companySearchTerm.toLowerCase()) ||
+      company.number?.toLowerCase().includes(companySearchTerm.toLowerCase())
+    ),
+    [companies, companySearchTerm]
+  );
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -169,6 +223,7 @@ export function NewTicketForm() {
           for_user_id: '',
           template_id: ''
         });
+        setCompanySearchTerm('');
         setLocations([]);
         setUsers([]);
       } else {
@@ -280,22 +335,54 @@ export function NewTicketForm() {
                 <Building className="h-4 w-4" />
                 Company *
               </Label>
-              <Select 
-                value={formData.company_id} 
-                onValueChange={(value) => handleInputChange('company_id', value)}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a company" />
-                </SelectTrigger>
-                <SelectContent>
-                  {companies.map((company) => (
-                    <SelectItem key={company.id} value={company.id.toString()}>
-                      {company.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="relative" ref={companyDropdownRef}>
+                <Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
+                <Input
+                  placeholder="Search companies..."
+                  value={companySearchTerm}
+                  onChange={(e) => {
+                    setCompanySearchTerm(e.target.value);
+                    setShowCompanyDropdown(true);
+                  }}
+                  onFocus={() => setShowCompanyDropdown(true)}
+                  className="pl-10 pr-8"
+                  style={{ paddingLeft: '2.75rem' }}
+                  disabled={isSubmitting}
+                />
+                {formData.company_id && (
+                  <button
+                    onClick={handleCompanyClear}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                    type="button"
+                  >
+                    ×
+                  </button>
+                )}
+                {showCompanyDropdown && filteredCompanies.length > 0 && (
+                  <Card className="absolute top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto z-50 shadow-lg">
+                    <CardContent className="p-0">
+                      {filteredCompanies.slice(0, 10).map((company) => (
+                        <button
+                          key={company.id}
+                          onClick={() => handleCompanySelect(company)}
+                          className="w-full text-left px-3 py-2 hover:bg-accent hover:text-accent-foreground border-b last:border-b-0 transition-colors"
+                          type="button"
+                        >
+                          <div className="font-medium">{company.name}</div>
+                          {company.number && (
+                            <div className="text-sm text-muted-foreground">#{company.number}</div>
+                          )}
+                        </button>
+                      ))}
+                      {filteredCompanies.length > 10 && (
+                        <div className="px-3 py-2 text-sm text-muted-foreground border-t">
+                          {filteredCompanies.length - 10} more companies...
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
             </div>
 
             {/* Location */}
@@ -387,6 +474,9 @@ export function NewTicketForm() {
                     for_user_id: '',
                     template_id: ''
                   });
+                  setCompanySearchTerm('');
+                  setLocations([]);
+                  setUsers([]);
                   setError('');
                   setSuccess(false);
                 }}

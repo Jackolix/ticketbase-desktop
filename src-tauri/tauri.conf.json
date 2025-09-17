@@ -33,6 +33,8 @@
             "core:webview:allow-create-webview-window",
             "core:window:allow-set-focus",
             "core:window:allow-close",
+            "notification:default",
+            "notification:allow-request-permission",
             "fs:allow-write-file",
             "fs:allow-read-file",
             "fs:allow-create",
