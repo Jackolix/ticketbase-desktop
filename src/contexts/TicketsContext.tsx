@@ -152,6 +152,16 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   // Filter state management functions
   const updateFilterState = useCallback((updates: Partial<FilterState>) => {
     setFilterState(prev => {
+      // Only update if values actually changed to prevent unnecessary re-renders
+      const hasChanges = Object.keys(updates).some(key => {
+        const typedKey = key as keyof FilterState;
+        return prev[typedKey] !== updates[typedKey];
+      });
+
+      if (!hasChanges) {
+        return prev;
+      }
+
       const newState = { ...prev, ...updates };
       // Save to sessionStorage
       try {

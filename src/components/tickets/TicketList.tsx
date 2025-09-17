@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -61,7 +61,14 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   const [searchedTicket, setSearchedTicket] = useState<Ticket | null>(null);
   const [isSearchingTicket, setIsSearchingTicket] = useState(false);
   const [isLoadingAdvancedSearch, setIsLoadingAdvancedSearch] = useState(false);
+  const [visibleItemCounts, setVisibleItemCounts] = useState({
+    my: 50,
+    new: 50,
+    all: 50
+  });
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+
+  const ITEMS_PER_PAGE = 50;
 
   // Load customers on mount
   useEffect(() => {
@@ -123,35 +130,70 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     }
   };
 
-  const handleCustomerSelect = (customer: { id: number; name: string; number?: string }) => {
+  const handleCustomerSelect = useCallback((customer: { id: number; name: string; number?: string }) => {
     updateFilterState({
       customerFilter: customer.id.toString(),
       customerSearchTerm: customer.name,
       showAdvancedFilters: true
     });
     setShowCustomerDropdown(false);
-  };
+  }, [updateFilterState]);
 
-  const handleCustomerClear = () => {
+  const handleCustomerClear = useCallback(() => {
     updateFilterState({
       customerFilter: '',
       customerSearchTerm: ''
     });
     setShowCustomerDropdown(false);
     setAllTicketsForSearch(null);
-  };
+  }, [updateFilterState, setAllTicketsForSearch]);
 
-  const handleClearFilters = () => {
+  const handleClearFilters = useCallback(() => {
     clearFilters();
     setAllTicketsForSearch(null);
     setSearchedTicket(null);
-  };
+    // Reset pagination when clearing filters
+    setVisibleItemCounts({
+      my: ITEMS_PER_PAGE,
+      new: ITEMS_PER_PAGE,
+      all: ITEMS_PER_PAGE
+    });
+  }, [clearFilters, setAllTicketsForSearch, ITEMS_PER_PAGE]);
 
-  // Filter customers based on search term
-  const filteredCustomers = customers.filter(customer =>
-    customer.name.toLowerCase().includes(filterState.customerSearchTerm.toLowerCase()) ||
-    customer.number?.toLowerCase().includes(filterState.customerSearchTerm.toLowerCase())
+  // Memoized filtered customers to prevent unnecessary re-filtering
+  const filteredCustomers = useMemo(() =>
+    customers.filter(customer =>
+      customer.name.toLowerCase().includes(filterState.customerSearchTerm.toLowerCase()) ||
+      customer.number?.toLowerCase().includes(filterState.customerSearchTerm.toLowerCase())
+    ),
+    [customers, filterState.customerSearchTerm]
   );
+
+  // Get effective description from ticket (description or template_data)
+  const getTicketDescription = useCallback((ticket: Ticket) => {
+    if (ticket.description && ticket.description.trim()) {
+      return ticket.description;
+    }
+
+    // If description is empty, try to extract meaningful content from template_data
+    if (ticket.template_data && ticket.template_data.trim()) {
+      try {
+        const templateData = JSON.parse(ticket.template_data);
+        if (typeof templateData === 'object' && templateData !== null) {
+          // Extract values from template data and join them
+          const values = Object.values(templateData)
+            .filter(value => value && typeof value === 'string' && value.trim())
+            .join(', ');
+          return values || 'Custom template data';
+        }
+      } catch {
+        // If parsing fails, return the raw template data
+        return ticket.template_data;
+      }
+    }
+
+    return 'No description available';
+  }, []);
 
   const searchTicketById = async (ticketId: number) => {
     setIsSearchingTicket(true);
@@ -289,7 +331,9 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   };
 
   // Enhanced filter function that includes searched ticket and uses all tickets when needed
-  const getFilteredTickets = (ticketList: Ticket[]) => {
+  const getFilteredTickets = useCallback((ticketList: Ticket[]) => {
+    perf.startTimer('getFilteredTickets');
+
     // Use all tickets for search when customer filter is active and we have them loaded
     const ticketsToFilter = (filterState.customerFilter && allTicketsForSearch)
       ? [...allTicketsForSearch.new_tickets, ...allTicketsForSearch.my_tickets, ...allTicketsForSearch.all_tickets]
@@ -313,60 +357,90 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       }
     }
 
-    return sortTickets(finalTickets);
-  };
+    const result = sortTickets(finalTickets);
+    perf.endTimer('getFilteredTickets');
+    return result;
+  }, [filterState, allTicketsForSearch, searchedTicket, perf]);
 
-  // Get effective description from ticket (description or template_data)
-  const getTicketDescription = (ticket: Ticket) => {
-    if (ticket.description && ticket.description.trim()) {
-      return ticket.description;
-    }
+  // Memoized filtered results for each tab to prevent recalculation
+  const filteredMyTickets = useMemo(() =>
+    getFilteredTickets(tickets.my_tickets),
+    [getFilteredTickets, tickets.my_tickets]
+  );
 
-    // If description is empty, try to extract meaningful content from template_data
-    if (ticket.template_data && ticket.template_data.trim()) {
-      try {
-        const templateData = JSON.parse(ticket.template_data);
-        if (typeof templateData === 'object' && templateData !== null) {
-          // Extract values from template data and join them
-          const values = Object.values(templateData)
-            .filter(value => value && typeof value === 'string' && value.trim())
-            .join(', ');
-          return values || 'Custom template data';
-        }
-      } catch {
-        // If parsing fails, return the raw template data
-        return ticket.template_data;
-      }
-    }
+  const filteredNewTickets = useMemo(() =>
+    getFilteredTickets(tickets.new_tickets),
+    [getFilteredTickets, tickets.new_tickets]
+  );
 
-    return 'No description available';
-  };
+  const filteredAllTickets = useMemo(() =>
+    getFilteredTickets(tickets.all_tickets),
+    [getFilteredTickets, tickets.all_tickets]
+  );
 
-  // Handle search term changes and check for ticket ID search
+  // Paginated results for performance
+  const paginatedMyTickets = useMemo(() =>
+    filteredMyTickets.slice(0, visibleItemCounts.my),
+    [filteredMyTickets, visibleItemCounts.my]
+  );
+
+  const paginatedNewTickets = useMemo(() =>
+    filteredNewTickets.slice(0, visibleItemCounts.new),
+    [filteredNewTickets, visibleItemCounts.new]
+  );
+
+  const paginatedAllTickets = useMemo(() =>
+    filteredAllTickets.slice(0, visibleItemCounts.all),
+    [filteredAllTickets, visibleItemCounts.all]
+  );
+
+  // Reset pagination when filters change
   useEffect(() => {
-    if (filterState.searchTerm) {
-      // Check if search term is a number (potential ticket ID)
-      const ticketId = parseInt(filterState.searchTerm);
-      if (!isNaN(ticketId) && filterState.searchTerm.trim() === ticketId.toString()) {
-        // Check if this ticket ID exists in current datasets
-        const allCurrentTickets = [...tickets.new_tickets, ...tickets.my_tickets, ...tickets.all_tickets];
-        const existsInCurrent = allCurrentTickets.some(ticket => ticket.id === ticketId);
+    setVisibleItemCounts({
+      my: ITEMS_PER_PAGE,
+      new: ITEMS_PER_PAGE,
+      all: ITEMS_PER_PAGE
+    });
+  }, [filterState.searchTerm, filterState.statusFilter, filterState.priorityFilter, filterState.customerFilter, filterState.sortBy, ITEMS_PER_PAGE]);
 
-        if (!existsInCurrent) {
-          // Search for the ticket by ID
-          searchTicketById(ticketId);
+  // Load more functions
+  const loadMoreTickets = useCallback((tab: 'my' | 'new' | 'all') => {
+    setVisibleItemCounts(prev => ({
+      ...prev,
+      [tab]: prev[tab] + ITEMS_PER_PAGE
+    }));
+  }, [ITEMS_PER_PAGE]);
+
+
+  // Handle search term changes and check for ticket ID search (debounced for performance)
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (filterState.searchTerm) {
+        // Check if search term is a number (potential ticket ID)
+        const ticketId = parseInt(filterState.searchTerm);
+        if (!isNaN(ticketId) && filterState.searchTerm.trim() === ticketId.toString()) {
+          // Check if this ticket ID exists in current datasets
+          const allCurrentTickets = [...tickets.new_tickets, ...tickets.my_tickets, ...tickets.all_tickets];
+          const existsInCurrent = allCurrentTickets.some(ticket => ticket.id === ticketId);
+
+          if (!existsInCurrent) {
+            // Search for the ticket by ID
+            searchTicketById(ticketId);
+          } else {
+            // Clear searched ticket if it exists in current data
+            setSearchedTicket(null);
+          }
         } else {
-          // Clear searched ticket if it exists in current data
+          // Clear searched ticket for non-ID searches
           setSearchedTicket(null);
         }
       } else {
-        // Clear searched ticket for non-ID searches
+        // Clear searched ticket when search is empty
         setSearchedTicket(null);
       }
-    } else {
-      // Clear searched ticket when search is empty
-      setSearchedTicket(null);
-    }
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timeoutId);
   }, [filterState.searchTerm, tickets]);
 
   const getPriorityColor = (priority: string, index: number) => {
@@ -435,14 +509,27 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     }
   };
 
-  const TicketItem = ({ ticket }: { ticket: Ticket }) => {
-    const isCurrentUserTicket = user && ticket.ticketTerminatedUser &&
-      (ticket.ticketTerminatedUser === user.name);
+  // Memoized TicketItem component to prevent unnecessary re-renders
+  const TicketItem = memo(({ ticket, onSelect, onOpenInNewWindow, currentUserName }: {
+    ticket: Ticket;
+    onSelect: (ticket: Ticket) => void;
+    onOpenInNewWindow: (ticket: Ticket, event: React.MouseEvent) => void;
+    currentUserName?: string;
+  }) => {
+    const isCurrentUserTicket = currentUserName && ticket.ticketTerminatedUser &&
+      (ticket.ticketTerminatedUser === currentUserName);
+
+    const ticketDescription = useMemo(() => getTicketDescription(ticket), [ticket]);
+    const formattedDate = useMemo(() => formatDate(ticket.created_at), [ticket.created_at]);
+    const formattedStartDate = useMemo(() =>
+      ticket.ticket_start ? formatDate(ticket.ticket_start) : null,
+      [ticket.ticket_start]
+    );
 
     return (
       <Card className={`cursor-pointer hover:bg-accent/50 transition-colors ${
         isCurrentUserTicket ? 'border-l-4 border-l-blue-500 bg-blue-500/10 dark:bg-blue-400/10' : ''
-      }`} onClick={() => onTicketSelect(ticket)}>
+      }`} onClick={() => onSelect(ticket)}>
         <CardContent className="p-4">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -484,7 +571,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={(e) => handleOpenInNewWindow(ticket, e)}>
+                <DropdownMenuItem onClick={(e) => onOpenInNewWindow(ticket, e)}>
                   <ExternalLink className="h-4 w-4" />
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -493,7 +580,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         </div>
 
         <h3 className="font-semibold mb-2 line-clamp-2">{ticket.summary}</h3>
-        <p className="text-sm text-muted-foreground mb-3 line-clamp-2">{getTicketDescription(ticket)}</p>
+        <p className="text-sm text-muted-foreground mb-3 line-clamp-2">{ticketDescription}</p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
           <div className="flex items-center gap-1 text-muted-foreground">
@@ -516,12 +603,12 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           )}
           <div className="flex items-center gap-1 text-muted-foreground">
             <Calendar className="h-3 w-3" />
-            <span>{formatDate(ticket.created_at)}</span>
+            <span>{formattedDate}</span>
           </div>
-          {ticket.ticket_start && (
+          {formattedStartDate && (
             <div className="flex items-center gap-1 text-muted-foreground">
               <Clock className="h-3 w-3" />
-              <span>{formatDate(ticket.ticket_start)}</span>
+              <span>{formattedStartDate}</span>
             </div>
           )}
         </div>
@@ -535,7 +622,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       </CardContent>
     </Card>
     );
-  };
+  });
 
   if (isLoading) {
     return (
@@ -768,7 +855,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 variant="outline"
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
-                {getFilteredTickets(tickets.my_tickets).length}
+{filteredMyTickets.length}
               </Badge>
             )}
           </TabsTrigger>
@@ -783,7 +870,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 variant="outline"
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
-                {getFilteredTickets(tickets.new_tickets).length}
+{filteredNewTickets.length}
               </Badge>
             )}
           </TabsTrigger>
@@ -798,7 +885,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 variant="outline"
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
-                {getFilteredTickets(tickets.all_tickets).length}
+{filteredAllTickets.length}
               </Badge>
             )}
           </TabsTrigger>
@@ -810,10 +897,31 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               <div className="text-sm text-muted-foreground">Searching for ticket...</div>
             </div>
           )}
-          {getFilteredTickets(tickets.my_tickets).map((ticket) => (
-            <TicketItem key={ticket.id} ticket={ticket} />
+          {paginatedMyTickets.map((ticket) => (
+            <TicketItem
+              key={ticket.id}
+              ticket={ticket}
+              onSelect={onTicketSelect}
+              onOpenInNewWindow={handleOpenInNewWindow}
+              currentUserName={user?.name}
+            />
           ))}
-          {getFilteredTickets(tickets.my_tickets).length === 0 && !isSearchingTicket && (
+
+          {/* Load More Button */}
+          {filteredMyTickets.length > paginatedMyTickets.length && (
+            <div className="flex justify-center py-4">
+              <Button
+                variant="outline"
+                onClick={() => loadMoreTickets('my')}
+                className="flex items-center gap-2"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Load More ({filteredMyTickets.length - paginatedMyTickets.length} remaining)
+              </Button>
+            </div>
+          )}
+
+          {filteredMyTickets.length === 0 && !isSearchingTicket && (
             <Card>
               <CardContent className="p-8 text-center">
                 <User className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
@@ -829,10 +937,31 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               <div className="text-sm text-muted-foreground">Searching for ticket...</div>
             </div>
           )}
-          {getFilteredTickets(tickets.new_tickets).map((ticket) => (
-            <TicketItem key={ticket.id} ticket={ticket} />
+          {paginatedNewTickets.map((ticket) => (
+            <TicketItem
+              key={ticket.id}
+              ticket={ticket}
+              onSelect={onTicketSelect}
+              onOpenInNewWindow={handleOpenInNewWindow}
+              currentUserName={user?.name}
+            />
           ))}
-          {getFilteredTickets(tickets.new_tickets).length === 0 && !isSearchingTicket && (
+
+          {/* Load More Button */}
+          {filteredNewTickets.length > paginatedNewTickets.length && (
+            <div className="flex justify-center py-4">
+              <Button
+                variant="outline"
+                onClick={() => loadMoreTickets('new')}
+                className="flex items-center gap-2"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Load More ({filteredNewTickets.length - paginatedNewTickets.length} remaining)
+              </Button>
+            </div>
+          )}
+
+          {filteredNewTickets.length === 0 && !isSearchingTicket && (
             <Card>
               <CardContent className="p-8 text-center">
                 <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
@@ -848,10 +977,31 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               <div className="text-sm text-muted-foreground">Searching for ticket...</div>
             </div>
           )}
-          {getFilteredTickets(tickets.all_tickets).map((ticket) => (
-            <TicketItem key={ticket.id} ticket={ticket} />
+          {paginatedAllTickets.map((ticket) => (
+            <TicketItem
+              key={ticket.id}
+              ticket={ticket}
+              onSelect={onTicketSelect}
+              onOpenInNewWindow={handleOpenInNewWindow}
+              currentUserName={user?.name}
+            />
           ))}
-          {getFilteredTickets(tickets.all_tickets).length === 0 && !isSearchingTicket && (
+
+          {/* Load More Button */}
+          {filteredAllTickets.length > paginatedAllTickets.length && (
+            <div className="flex justify-center py-4">
+              <Button
+                variant="outline"
+                onClick={() => loadMoreTickets('all')}
+                className="flex items-center gap-2"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Load More ({filteredAllTickets.length - paginatedAllTickets.length} remaining)
+              </Button>
+            </div>
+          )}
+
+          {filteredAllTickets.length === 0 && !isSearchingTicket && (
             <Card>
               <CardContent className="p-8 text-center">
                 <div className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
