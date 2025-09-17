@@ -35,7 +35,7 @@ function AppContent() {
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
 
-  // Check URL for ticket routing on mount
+  // Check URL for ticket routing on mount and cleanup temp files
   useEffect(() => {
     const checkUrlForTicket = () => {
       const hash = window.location.hash;
@@ -54,6 +54,11 @@ function AppContent() {
 
     if (isAuthenticated) {
       checkUrlForTicket();
+
+      // Clean up old temp files on app startup
+      import('./lib/windowManager').then(({ WindowManager }) => {
+        WindowManager.cleanupOldTempFiles();
+      });
     }
   }, [isAuthenticated]);
 
@@ -69,6 +74,18 @@ function AppContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showDebugPanel]);
+
+  // Cleanup temp files on app shutdown
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      import('./lib/windowManager').then(({ WindowManager }) => {
+        WindowManager.cleanupAllTempFiles();
+      });
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   const loadTicketById = async (ticketId: number) => {
     setIsLoadingTicket(true);

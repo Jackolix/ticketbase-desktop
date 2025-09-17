@@ -11,7 +11,8 @@ import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
 import { TicketPlayerControls } from './TicketPlayerControls';
-import { 
+import { FilePreviewModal } from '@/components/ui/FilePreviewModal';
+import {
   ArrowLeft,
   Calendar,
   Building,
@@ -28,7 +29,8 @@ import {
   ExternalLink,
   FileText,
   History,
-  ListTodo
+  ListTodo,
+  Eye
 } from 'lucide-react';
 
 interface TicketDetailProps {
@@ -47,6 +49,7 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
   const [newHistoryStatus, setNewHistoryStatus] = useState('3'); // Default to "In Progress"
   const [isAddingHistory, setIsAddingHistory] = useState(false);
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
+  const [previewFile, setPreviewFile] = useState<{ filename: string; ticketId: number } | null>(null);
 
   const handleOpenInNewWindow = async () => {
     try {
@@ -217,12 +220,16 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     return 'No description available';
   };
 
+  const handlePreviewAttachment = (filename: string) => {
+    setPreviewFile({ filename, ticketId: ticket.id });
+  };
+
   const handleDownloadAttachment = async (filename: string) => {
     setDownloadingFiles(prev => new Set(prev).add(filename));
-    
+
     try {
       const blob = await apiClient.downloadAttachment(ticket.id, filename);
-      
+
       // Create download link
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -324,22 +331,36 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                       </h4>
                       <div className="space-y-2">
                         {ticket.attachments.map((filename, index) => (
-                          <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded hover:bg-muted/80 transition-colors">
+                          <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded hover:bg-muted/80 transition-colors group">
                             <Paperclip className="h-4 w-4 text-muted-foreground" />
-                            <span className="text-sm flex-1">{filename}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0"
-                              onClick={() => handleDownloadAttachment(filename)}
-                              disabled={downloadingFiles.has(filename)}
-                            >
-                              {downloadingFiles.has(filename) ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Download className="h-4 w-4" />
-                              )}
-                            </Button>
+                            <span className="text-sm flex-1 cursor-pointer" onClick={() => handlePreviewAttachment(filename)}>
+                              {filename}
+                            </span>
+                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                onClick={() => handlePreviewAttachment(filename)}
+                                title="Preview file"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                onClick={() => handleDownloadAttachment(filename)}
+                                disabled={downloadingFiles.has(filename)}
+                                title="Download file"
+                              >
+                                {downloadingFiles.has(filename) ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Download className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -621,6 +642,18 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
           </Card>
         </div>
       </div>
+
+      {/* File Preview Modal */}
+      {previewFile && (
+        <FilePreviewModal
+          isOpen={!!previewFile}
+          onClose={() => setPreviewFile(null)}
+          filename={previewFile.filename}
+          ticketId={previewFile.ticketId}
+          onDownload={() => handleDownloadAttachment(previewFile.filename)}
+          isDownloading={downloadingFiles.has(previewFile.filename)}
+        />
+      )}
     </div>
   );
 }
