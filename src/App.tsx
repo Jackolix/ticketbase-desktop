@@ -15,10 +15,11 @@ import { Settings } from "./components/settings/Settings";
 import { Reports } from "./components/reports/Reports";
 import { TicketWindow } from "./components/tickets/TicketWindow";
 import { UpdateNotification } from "./components/ui/UpdateNotification";
+import { DebugPanel } from "./components/debug/DebugPanel";
 import { Toaster } from "./components/ui/sonner";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
-import { 
+import {
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbList,
@@ -32,19 +33,20 @@ function AppContent() {
   const [currentView, setCurrentView] = useState("dashboard");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
 
   // Check URL for ticket routing on mount
   useEffect(() => {
     const checkUrlForTicket = () => {
       const hash = window.location.hash;
       const ticketMatch = hash.match(/^#\/ticket\/(\d+)$/);
-      
+
       if (ticketMatch) {
         const ticketId = parseInt(ticketMatch[1], 10);
         loadTicketById(ticketId);
         return;
       }
-      
+
       // Default to dashboard if no specific route
       setCurrentView("dashboard");
       setSelectedTicket(null);
@@ -54,6 +56,19 @@ function AppContent() {
       checkUrlForTicket();
     }
   }, [isAuthenticated]);
+
+  // Debug panel keyboard shortcut (Ctrl+Shift+D)
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey && event.key === 'D') {
+        event.preventDefault();
+        setShowDebugPanel(!showDebugPanel);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showDebugPanel]);
 
   const loadTicketById = async (ticketId: number) => {
     setIsLoadingTicket(true);
@@ -215,6 +230,10 @@ function AppContent() {
         </div>
       </SidebarInset>
       <UpdateNotification />
+      <DebugPanel
+        isVisible={showDebugPanel && process.env.NODE_ENV === 'development'}
+        onClose={() => setShowDebugPanel(false)}
+      />
       <Toaster />
     </SidebarProvider>
   );

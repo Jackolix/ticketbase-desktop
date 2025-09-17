@@ -11,8 +11,7 @@ import { useTickets } from '@/contexts/TicketsContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
-import { Ticket } from '@/types/api';
-import { usePerformanceMonitor } from '@/utils/performanceMonitor';
+import { Ticket, Company } from '@/types/api';
 import {
   Search,
   Calendar,
@@ -34,71 +33,270 @@ import {
   ArrowUpDown
 } from 'lucide-react';
 
+// Global cache that persists across component remounts
+let globalAllTicketsCache: {
+  tickets: {
+    new_tickets: Ticket[];
+    my_tickets: Ticket[];
+    all_tickets: Ticket[];
+  };
+  timestamp: number;
+} | null = null;
+
 interface TicketListProps {
   onTicketSelect: (ticket: Ticket) => void;
 }
 
 export function TicketList({ onTicketSelect }: TicketListProps) {
-  const {
-    tickets,
-    isLoading,
-    isRefreshing,
-    refreshTickets,
-    lastUpdated,
-    loadAllTicketsForSearch,
-    filterState,
-    updateFilterState,
-    clearFilters,
-    allTicketsForSearch,
-    setAllTicketsForSearch,
-    customers,
-    setCustomers
-  } = useTickets();
+  const { tickets, isLoading, isRefreshing, refreshTickets, lastUpdated, loadAllTicketsForSearch } = useTickets();
   const { user } = useAuth();
-  const perf = usePerformanceMonitor('TicketList');
-
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [priorityFilter, setPriorityFilter] = useState('all');
+  const [customerFilter, setCustomerFilter] = useState('');
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [dateFromFilter, setDateFromFilter] = useState('');
+  const [dateToFilter, setDateToFilter] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [sortBy, setSortBy] = useState('date-desc');
+  const [customers, setCustomers] = useState<Company[]>([]);
   const [searchedTicket, setSearchedTicket] = useState<Ticket | null>(null);
   const [isSearchingTicket, setIsSearchingTicket] = useState(false);
+  const [allTicketsForSearch, setAllTicketsForSearch] = useState<{
+    new_tickets: Ticket[];
+    my_tickets: Ticket[];
+    all_tickets: Ticket[];
+  } | null>(null);
   const [isLoadingAdvancedSearch, setIsLoadingAdvancedSearch] = useState(false);
+  const [hasAttemptedCacheRestore, setHasAttemptedCacheRestore] = useState(false);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Load customers on mount
+  // In-memory cache for large datasets that can't fit in sessionStorage
+  const allTicketsCacheRef = useRef<{
+    tickets: {
+      new_tickets: Ticket[];
+      my_tickets: Ticket[];
+      all_tickets: Ticket[];
+    };
+    timestamp: number;
+  } | null>(null);
+
+  // Save search state to sessionStorage
+  const saveSearchState = () => {
+    const searchState = {
+      searchTerm,
+      statusFilter,
+      priorityFilter,
+      customerFilter,
+      customerSearchTerm,
+      dateFromFilter,
+      dateToFilter,
+      showAdvancedFilters,
+      sortBy
+    };
+    sessionStorage.setItem('ticketSearchState', JSON.stringify(searchState));
+  };
+
+  // Cache management for expensive search results
+  const saveAllTicketsToCache = (tickets: {
+    new_tickets: Ticket[];
+    my_tickets: Ticket[];
+    all_tickets: Ticket[];
+  }) => {
+    const cacheData = {
+      tickets,
+      timestamp: Date.now()
+    };
+
+    // Save to global cache (persists across component remounts)
+    globalAllTicketsCache = cacheData;
+    // Also save to component ref for backwards compatibility
+    allTicketsCacheRef.current = cacheData;
+
+    // Try to save to sessionStorage as backup (may fail due to quota)
+    try {
+      // Store a lightweight marker instead of full data
+      const marker = {
+        hasCache: true,
+        timestamp: Date.now(),
+        ticketCount: tickets.new_tickets.length + tickets.my_tickets.length + tickets.all_tickets.length
+      };
+      sessionStorage.setItem('allTicketsForSearchCache', JSON.stringify(marker));
+    } catch (error) {
+      console.warn('Failed to save cache marker to sessionStorage:', error);
+      // Continue without sessionStorage - global cache will still work
+    }
+  };
+
+  const loadAllTicketsFromCache = () => {
+    // First try global cache (persists across component remounts)
+    if (globalAllTicketsCache) {
+      const { tickets, timestamp } = globalAllTicketsCache;
+      // Cache expires after 5 minutes
+      if (Date.now() - timestamp < 5 * 60 * 1000) {
+        console.log('Loading tickets from global cache');
+        // Also update component ref
+        allTicketsCacheRef.current = globalAllTicketsCache;
+        return tickets;
+      } else {
+        // Clear expired cache
+        globalAllTicketsCache = null;
+        allTicketsCacheRef.current = null;
+      }
+    }
+
+    // Fallback: try component ref cache
+    if (allTicketsCacheRef.current) {
+      const { tickets, timestamp } = allTicketsCacheRef.current;
+      // Cache expires after 5 minutes
+      if (Date.now() - timestamp < 5 * 60 * 1000) {
+        console.log('Loading tickets from component cache');
+        return tickets;
+      } else {
+        // Clear expired cache
+        allTicketsCacheRef.current = null;
+      }
+    }
+
+    // Fallback: check if sessionStorage indicates we had cached data
+    try {
+      const cached = sessionStorage.getItem('allTicketsForSearchCache');
+      if (cached) {
+        const marker = JSON.parse(cached);
+        if (marker.hasCache && Date.now() - marker.timestamp < 5 * 60 * 1000) {
+          console.log('Cache marker found but cache is empty - cache was lost during navigation');
+          // We know there was cached data but it's no longer available
+          return null;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load cache marker:', error);
+    }
+
+    return null;
+  };
+
+  const clearAllTicketsCache = () => {
+    globalAllTicketsCache = null;
+    allTicketsCacheRef.current = null;
+    try {
+      sessionStorage.removeItem('allTicketsForSearchCache');
+    } catch (error) {
+      console.warn('Failed to clear sessionStorage cache:', error);
+    }
+  };
+
+  // Load advanced search for customer (used when restoring state)
+  const loadAdvancedSearchForCustomer = async () => {
+    setIsLoadingAdvancedSearch(true);
+    try {
+      const allTickets = await loadAllTicketsForSearch();
+      setAllTicketsForSearch(allTickets);
+      saveAllTicketsToCache(allTickets);
+    } catch (error) {
+      console.error('Failed to load advanced search for customer:', error);
+    } finally {
+      setIsLoadingAdvancedSearch(false);
+    }
+  };
+
+  // Restore search state from sessionStorage
+  useEffect(() => {
+    const savedState = sessionStorage.getItem('ticketSearchState');
+    if (savedState) {
+      try {
+        const state = JSON.parse(savedState);
+        setSearchTerm(state.searchTerm || '');
+        setStatusFilter(state.statusFilter || 'all');
+        setPriorityFilter(state.priorityFilter || 'all');
+        setCustomerFilter(state.customerFilter || '');
+        setCustomerSearchTerm(state.customerSearchTerm || '');
+        setDateFromFilter(state.dateFromFilter || '');
+        setDateToFilter(state.dateToFilter || '');
+        setShowAdvancedFilters(state.showAdvancedFilters || !!state.customerFilter || !!state.dateFromFilter || !!state.dateToFilter);
+        setSortBy(state.sortBy || 'date-desc');
+
+        // Note: Cached tickets will be restored in the customer useEffect after customers load
+      } catch (error) {
+        console.error('Failed to restore search state:', error);
+      }
+    }
+  }, []);
+
+  // Restore customer search term and cached tickets after customers are loaded
+  useEffect(() => {
+    if (customers.length > 0 && customerFilter && !hasAttemptedCacheRestore) {
+      console.log('Attempting to restore customer state:', { customerFilter, customerSearchTerm, hasAllTickets: !!allTicketsForSearch });
+
+      let needsAdvancedSearch = false;
+
+      // Restore customer search term if not already set
+      if (!customerSearchTerm) {
+        const selectedCustomer = customers.find(c => c.id.toString() === customerFilter);
+        if (selectedCustomer) {
+          console.log('Restoring customer search term:', selectedCustomer.name);
+          setCustomerSearchTerm(selectedCustomer.name);
+        }
+      }
+
+      // Restore cached tickets if customer filter is active but we don't have tickets loaded
+      if (!allTicketsForSearch) {
+        const cachedTickets = loadAllTicketsFromCache();
+        if (cachedTickets) {
+          console.log('Restoring cached tickets:', cachedTickets);
+          setAllTicketsForSearch(cachedTickets);
+        } else {
+          console.log('No cached tickets found - will need to reload advanced search');
+          needsAdvancedSearch = true;
+        }
+      }
+
+      setHasAttemptedCacheRestore(true);
+
+      // Load advanced search after setting the flag to prevent multiple calls
+      if (needsAdvancedSearch) {
+        console.log('Auto-reloading advanced search for customer filter:', customerFilter);
+        loadAdvancedSearchForCustomer();
+      }
+    }
+  }, [customers, customerFilter, customerSearchTerm, hasAttemptedCacheRestore]); // Removed allTicketsForSearch from deps
+
+  // Force cache restoration when returning to ticket list with active filters
+  useEffect(() => {
+    if (customers.length > 0 && customerFilter && allTicketsForSearch === null && !isLoadingAdvancedSearch) {
+      // We have a customer filter but no cached tickets - try to restore them
+      const cachedTickets = loadAllTicketsFromCache();
+      if (cachedTickets) {
+        console.log('Force restoring cached tickets on return:', cachedTickets);
+        setAllTicketsForSearch(cachedTickets);
+      } else if (!hasAttemptedCacheRestore) {
+        // No cached data found and we haven't tried to load it yet
+        console.log('Force loading advanced search on return for customer filter:', customerFilter);
+        loadAdvancedSearchForCustomer();
+      }
+    }
+  }, [customers.length, customerFilter, allTicketsForSearch, isLoadingAdvancedSearch, hasAttemptedCacheRestore]);
+
+  // Save search state whenever filters change
+  useEffect(() => {
+    saveSearchState();
+  }, [searchTerm, statusFilter, priorityFilter, customerFilter, customerSearchTerm, dateFromFilter, dateToFilter, showAdvancedFilters, sortBy]);
+
+  // Load customers for filtering
   useEffect(() => {
     const loadCustomers = async () => {
       try {
         const response = await apiClient.getCustomers();
         if (response.status === 'success' && 'customers' in response) {
-          setCustomers(response.customers);
+          setCustomers(response.customers as Company[]);
         }
       } catch (error) {
         console.error('Failed to load customers:', error);
       }
     };
     loadCustomers();
-  }, [setCustomers]);
-
-  // Load advanced search data when customer filter is applied
-  useEffect(() => {
-    if (filterState.customerFilter && !allTicketsForSearch && !isLoadingAdvancedSearch) {
-      console.log('Loading advanced search for customer filter:', filterState.customerFilter);
-      perf.startTimer('loadAdvancedSearch');
-      setIsLoadingAdvancedSearch(true);
-      loadAllTicketsForSearch().then((result) => {
-        setAllTicketsForSearch(result);
-        const dataSize = new Blob([JSON.stringify(result)]).size;
-        const ticketCount = result.new_tickets.length + result.my_tickets.length + result.all_tickets.length;
-        perf.recordCacheHit('advancedSearch', dataSize);
-        perf.recordCacheSize('advancedSearch', dataSize, ticketCount);
-      }).catch((error) => {
-        console.error('Failed to load all tickets for search:', error);
-        perf.recordCacheMiss('advancedSearch');
-      }).finally(() => {
-        setIsLoadingAdvancedSearch(false);
-        perf.endTimer('loadAdvancedSearch');
-      });
-    }
-  }, [filterState.customerFilter, allTicketsForSearch, isLoadingAdvancedSearch, loadAllTicketsForSearch, setAllTicketsForSearch, perf]);
+  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -123,35 +321,65 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     }
   };
 
-  const handleCustomerSelect = (customer: { id: number; name: string; number?: string }) => {
-    updateFilterState({
-      customerFilter: customer.id.toString(),
-      customerSearchTerm: customer.name,
-      showAdvancedFilters: true
-    });
+  const clearFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setPriorityFilter('all');
+    setCustomerFilter('');
+    setCustomerSearchTerm('');
     setShowCustomerDropdown(false);
+    setDateFromFilter('');
+    setDateToFilter('');
+    setSortBy('date-desc');
+    setAllTicketsForSearch(null); // Clear all tickets cache
+    clearAllTicketsCache(); // Clear persistent cache
+    setHasAttemptedCacheRestore(false); // Reset cache restore flag
+  };
+
+  const handleCustomerSelect = async (customer: Company) => {
+    setCustomerFilter(customer.id.toString());
+    setCustomerSearchTerm(customer.name);
+    setShowCustomerDropdown(false);
+
+    // Load all tickets for better search results when customer filter is applied
+    if (!allTicketsForSearch) {
+      // First try to load from cache
+      const cachedTickets = loadAllTicketsFromCache();
+      if (cachedTickets) {
+        setAllTicketsForSearch(cachedTickets);
+      } else {
+        // If no cache, fetch fresh data with loading indicator
+        setIsLoadingAdvancedSearch(true);
+        try {
+          const allTickets = await loadAllTicketsForSearch();
+          setAllTicketsForSearch(allTickets);
+          saveAllTicketsToCache(allTickets); // Cache the results
+        } catch (error) {
+          console.error('Failed to load all tickets for search:', error);
+        } finally {
+          setIsLoadingAdvancedSearch(false);
+        }
+      }
+    }
   };
 
   const handleCustomerClear = () => {
-    updateFilterState({
-      customerFilter: '',
-      customerSearchTerm: ''
-    });
+    setCustomerFilter('');
+    setCustomerSearchTerm('');
     setShowCustomerDropdown(false);
+    // Clear all tickets cache when no longer needed
     setAllTicketsForSearch(null);
-  };
-
-  const handleClearFilters = () => {
-    clearFilters();
-    setAllTicketsForSearch(null);
-    setSearchedTicket(null);
+    clearAllTicketsCache(); // Clear persistent cache
+    setHasAttemptedCacheRestore(false); // Reset cache restore flag
   };
 
   // Filter customers based on search term
   const filteredCustomers = customers.filter(customer =>
-    customer.name.toLowerCase().includes(filterState.customerSearchTerm.toLowerCase()) ||
-    customer.number?.toLowerCase().includes(filterState.customerSearchTerm.toLowerCase())
+    customer.name.toLowerCase().includes(customerSearchTerm.toLowerCase()) ||
+    customer.number?.toLowerCase().includes(customerSearchTerm.toLowerCase())
   );
+
+  // Tickets are now managed by the TicketsContext
 
   const searchTicketById = async (ticketId: number) => {
     setIsSearchingTicket(true);
@@ -159,7 +387,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       const response = await apiClient.getTicketById(ticketId);
       if (response.result === 'success' && response.tickets) {
         const rawTicket = response.tickets;
-
+        
         const transformedTicket: Ticket = {
           id: rawTicket.id,
           description: rawTicket.description || '',
@@ -192,7 +420,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           template_data: rawTicket.template_data || '',
           pool_name: '',
         };
-
+        
         setSearchedTicket(transformedTicket);
       } else {
         setSearchedTicket(null);
@@ -208,41 +436,41 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   const filterTickets = (ticketList: Ticket[]) => {
     return ticketList.filter(ticket => {
       const effectiveDescription = getTicketDescription(ticket);
-
+      
       // Search filter
-      const matchesSearch = !filterState.searchTerm ||
-        ticket.summary.toLowerCase().includes(filterState.searchTerm.toLowerCase()) ||
-        effectiveDescription.toLowerCase().includes(filterState.searchTerm.toLowerCase()) ||
-        ticket.company.name.toLowerCase().includes(filterState.searchTerm.toLowerCase()) ||
-        ticket.id.toString().includes(filterState.searchTerm);
-
+      const matchesSearch = !searchTerm || 
+        ticket.summary.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        effectiveDescription.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        ticket.company.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        ticket.id.toString().includes(searchTerm);
+        
       // Status filter
-      const matchesStatus = filterState.statusFilter === 'all' || ticket.status.toLowerCase() === filterState.statusFilter;
-
+      const matchesStatus = statusFilter === 'all' || ticket.status.toLowerCase() === statusFilter;
+      
       // Priority filter
-      const matchesPriority = filterState.priorityFilter === 'all' || ticket.priority.toLowerCase() === filterState.priorityFilter;
-
-      // Customer filter
-      const matchesCustomer = !filterState.customerFilter || (() => {
-        const selectedCustomer = customers.find(c => c.id.toString() === filterState.customerFilter);
+      const matchesPriority = priorityFilter === 'all' || ticket.priority.toLowerCase() === priorityFilter;
+      
+      // Customer filter - find the selected customer name and search broadly
+      const matchesCustomer = !customerFilter || (() => {
+        const selectedCustomer = customers.find(c => c.id.toString() === customerFilter);
         if (!selectedCustomer) return true;
-
+        
         const customerName = selectedCustomer.name.toLowerCase();
         const customerNumber = selectedCustomer.number?.toLowerCase() || '';
-
-        return ticket.company.id.toString() === filterState.customerFilter ||
+        
+        return ticket.company.id.toString() === customerFilter ||
                ticket.company.name.toLowerCase().includes(customerName) ||
                (customerNumber && ticket.company.number?.toLowerCase().includes(customerNumber)) ||
                ticket.summary.toLowerCase().includes(customerName) ||
                effectiveDescription.toLowerCase().includes(customerName);
       })();
-
+      
       // Date filter
-      const matchesDate = (!filterState.dateFromFilter && !filterState.dateToFilter) || (() => {
+      const matchesDate = (!dateFromFilter && !dateToFilter) || (() => {
         const ticketDate = new Date(ticket.created_at);
-        const fromDate = filterState.dateFromFilter ? new Date(filterState.dateFromFilter) : null;
-        const toDate = filterState.dateToFilter ? new Date(filterState.dateToFilter) : null;
-
+        const fromDate = dateFromFilter ? new Date(dateFromFilter) : null;
+        const toDate = dateToFilter ? new Date(dateToFilter) : null;
+        
         if (fromDate && toDate) {
           return ticketDate >= fromDate && ticketDate <= toDate;
         } else if (fromDate) {
@@ -252,7 +480,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         }
         return true;
       })();
-
+      
       return matchesSearch && matchesStatus && matchesPriority && matchesCustomer && matchesDate;
     });
   };
@@ -260,7 +488,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   // Sort tickets based on sortBy value
   const sortTickets = (ticketList: Ticket[]) => {
     const sorted = [...ticketList].sort((a, b) => {
-      switch (filterState.sortBy) {
+      switch (sortBy) {
         case 'date-desc':
           return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         case 'date-asc':
@@ -291,19 +519,19 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   // Enhanced filter function that includes searched ticket and uses all tickets when needed
   const getFilteredTickets = (ticketList: Ticket[]) => {
     // Use all tickets for search when customer filter is active and we have them loaded
-    const ticketsToFilter = (filterState.customerFilter && allTicketsForSearch)
+    const ticketsToFilter = (customerFilter && allTicketsForSearch) 
       ? [...allTicketsForSearch.new_tickets, ...allTicketsForSearch.my_tickets, ...allTicketsForSearch.all_tickets]
       : ticketList;
-
+      
     const filtered = filterTickets(ticketsToFilter);
-
+    
     // If we have a searched ticket and it matches the filters, include it
     let finalTickets = filtered;
     if (searchedTicket) {
-      const searchedMatches =
-        (filterState.statusFilter === 'all' || searchedTicket.status.toLowerCase() === filterState.statusFilter) &&
-        (filterState.priorityFilter === 'all' || searchedTicket.priority.toLowerCase() === filterState.priorityFilter);
-
+      const searchedMatches = 
+        (statusFilter === 'all' || searchedTicket.status.toLowerCase() === statusFilter) &&
+        (priorityFilter === 'all' || searchedTicket.priority.toLowerCase() === priorityFilter);
+      
       if (searchedMatches) {
         // Check if the searched ticket is already in the list
         const existsInList = filtered.some(ticket => ticket.id === searchedTicket.id);
@@ -312,7 +540,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         }
       }
     }
-
+    
     return sortTickets(finalTickets);
   };
 
@@ -321,7 +549,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     if (ticket.description && ticket.description.trim()) {
       return ticket.description;
     }
-
+    
     // If description is empty, try to extract meaningful content from template_data
     if (ticket.template_data && ticket.template_data.trim()) {
       try {
@@ -338,20 +566,20 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         return ticket.template_data;
       }
     }
-
+    
     return 'No description available';
   };
 
   // Handle search term changes and check for ticket ID search
   useEffect(() => {
-    if (filterState.searchTerm) {
+    if (searchTerm) {
       // Check if search term is a number (potential ticket ID)
-      const ticketId = parseInt(filterState.searchTerm);
-      if (!isNaN(ticketId) && filterState.searchTerm.trim() === ticketId.toString()) {
+      const ticketId = parseInt(searchTerm);
+      if (!isNaN(ticketId) && searchTerm.trim() === ticketId.toString()) {
         // Check if this ticket ID exists in current datasets
         const allCurrentTickets = [...tickets.new_tickets, ...tickets.my_tickets, ...tickets.all_tickets];
         const existsInCurrent = allCurrentTickets.some(ticket => ticket.id === ticketId);
-
+        
         if (!existsInCurrent) {
           // Search for the ticket by ID
           searchTicketById(ticketId);
@@ -367,7 +595,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       // Clear searched ticket when search is empty
       setSearchedTicket(null);
     }
-  }, [filterState.searchTerm, tickets]);
+  }, [searchTerm, tickets]);
 
   const getPriorityColor = (priority: string, index: number) => {
     if (priority === 'VERY_HIGH' || index > 7) return 'destructive';
@@ -436,9 +664,9 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   };
 
   const TicketItem = ({ ticket }: { ticket: Ticket }) => {
-    const isCurrentUserTicket = user && ticket.ticketTerminatedUser &&
+    const isCurrentUserTicket = user && ticket.ticketTerminatedUser && 
       (ticket.ticketTerminatedUser === user.name);
-
+    
     return (
       <Card className={`cursor-pointer hover:bg-accent/50 transition-colors ${
         isCurrentUserTicket ? 'border-l-4 border-l-blue-500 bg-blue-500/10 dark:bg-blue-400/10' : ''
@@ -491,10 +719,10 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             </DropdownMenu>
           </div>
         </div>
-
+        
         <h3 className="font-semibold mb-2 line-clamp-2">{ticket.summary}</h3>
         <p className="text-sm text-muted-foreground mb-3 line-clamp-2">{getTicketDescription(ticket)}</p>
-
+        
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
           <div className="flex items-center gap-1 text-muted-foreground">
             <Building className="h-3 w-3" />
@@ -525,7 +753,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             </div>
           )}
         </div>
-
+        
         {ticket.subject && (
           <div className="mt-2 pt-2 border-t">
             <span className="text-xs font-medium text-muted-foreground">Subject: </span>
@@ -578,7 +806,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             )}
           </Button>
         </div>
-
+        
         {/* Filters */}
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row gap-4">
@@ -586,13 +814,13 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
               <Input
                 placeholder="Search tickets..."
-                value={filterState.searchTerm}
-                onChange={(e) => updateFilterState({ searchTerm: e.target.value })}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-10"
                 style={{ paddingLeft: '2.75rem' }}
               />
             </div>
-            <Select value={filterState.statusFilter} onValueChange={(value) => updateFilterState({ statusFilter: value })}>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder="Filter by status" />
               </SelectTrigger>
@@ -606,7 +834,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 <SelectItem value="abgeschlossen">Abgeschlossen</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={filterState.priorityFilter} onValueChange={(value) => updateFilterState({ priorityFilter: value })}>
+            <Select value={priorityFilter} onValueChange={setPriorityFilter}>
               <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder="Filter by priority" />
               </SelectTrigger>
@@ -617,7 +845,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 <SelectItem value="normal">Normal</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={filterState.sortBy} onValueChange={(value) => updateFilterState({ sortBy: value })}>
+            <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="w-full sm:w-[180px]">
                 <ArrowUpDown className="h-4 w-4 mr-2" />
                 <SelectValue placeholder="Sort by" />
@@ -637,7 +865,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             </Select>
             <Button
               variant="outline"
-              onClick={() => updateFilterState({ showAdvancedFilters: !filterState.showAdvancedFilters })}
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
               className="flex items-center gap-2"
             >
               <Filter className="h-4 w-4" />
@@ -659,16 +887,16 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           )}
 
           {/* Advanced Filters */}
-          {filterState.showAdvancedFilters && (
+          {showAdvancedFilters && (
             <Card className="p-4 bg-muted/50">
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label className="font-medium">Advanced Filters</Label>
-                  <Button variant="ghost" size="sm" onClick={handleClearFilters}>
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
                     Clear All
                   </Button>
                 </div>
-
+                
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="customer-filter">Customer</Label>
@@ -677,16 +905,16 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                       <Input
                         id="customer-filter"
                         placeholder="Search customers..."
-                        value={filterState.customerSearchTerm}
+                        value={customerSearchTerm}
                         onChange={(e) => {
-                          updateFilterState({ customerSearchTerm: e.target.value });
+                          setCustomerSearchTerm(e.target.value);
                           setShowCustomerDropdown(true);
                         }}
                         onFocus={() => setShowCustomerDropdown(true)}
                         className="pl-10 pr-8"
                         style={{ paddingLeft: '2.75rem' }}
                       />
-                      {filterState.customerFilter && (
+                      {customerFilter && (
                         <button
                           onClick={handleCustomerClear}
                           className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground hover:text-foreground"
@@ -719,7 +947,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                       )}
                     </div>
                   </div>
-
+                  
                   <div className="space-y-2">
                     <Label htmlFor="date-from" className="flex items-center gap-2">
                       <Calendar className="h-4 w-4" />
@@ -728,12 +956,12 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                     <Input
                       id="date-from"
                       type="date"
-                      value={filterState.dateFromFilter}
-                      onChange={(e) => updateFilterState({ dateFromFilter: e.target.value })}
+                      value={dateFromFilter}
+                      onChange={(e) => setDateFromFilter(e.target.value)}
                       className="block w-full"
                     />
                   </div>
-
+                  
                   <div className="space-y-2">
                     <Label htmlFor="date-to" className="flex items-center gap-2">
                       <Calendar className="h-4 w-4" />
@@ -742,8 +970,8 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                     <Input
                       id="date-to"
                       type="date"
-                      value={filterState.dateToFilter}
-                      onChange={(e) => updateFilterState({ dateToFilter: e.target.value })}
+                      value={dateToFilter}
+                      onChange={(e) => setDateToFilter(e.target.value)}
                       className="block w-full"
                     />
                   </div>
@@ -757,45 +985,45 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       {/* Ticket Tabs */}
       <Tabs defaultValue="my" className="space-y-4">
         <TabsList className="grid w-full grid-cols-3 h-11">
-          <TabsTrigger
-            value="my"
+          <TabsTrigger 
+            value="my" 
             className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
           >
             <User className="w-4 h-4 mr-2" />
             My Tickets
             {tickets.my_tickets.length > 0 && (
-              <Badge
-                variant="outline"
+              <Badge 
+                variant="outline" 
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
                 {getFilteredTickets(tickets.my_tickets).length}
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger
-            value="new"
+          <TabsTrigger 
+            value="new" 
             className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
           >
             <AlertCircle className="w-4 h-4 mr-2" />
             New Tickets
             {tickets.new_tickets.length > 0 && (
-              <Badge
-                variant="outline"
+              <Badge 
+                variant="outline" 
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
                 {getFilteredTickets(tickets.new_tickets).length}
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger
-            value="all"
+          <TabsTrigger 
+            value="all" 
             className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium relative"
           >
             <Tickets className="w-4 h-4 mr-2" />
             All Tickets
             {tickets.all_tickets.length > 0 && (
-              <Badge
-                variant="outline"
+              <Badge 
+                variant="outline" 
                 className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
               >
                 {getFilteredTickets(tickets.all_tickets).length}
