@@ -25,7 +25,9 @@
         {
           "identifier": "main-capability",
           "description": "Capability for the main window",
-          "windows": ["main"],
+          "windows": [
+            "main"
+          ],
           "permissions": [
             "core:default",
             "core:webview:allow-create-webview-window",
@@ -40,23 +42,33 @@
             {
               "identifier": "opener:allow-open-path",
               "allow": [
-                { "path": "$TEMP/*" }
+                {
+                  "path": "$TEMP/*"
+                }
               ]
             },
             {
               "identifier": "opener:allow-open-url",
               "allow": [
-                { "url": "file://*" }
+                {
+                  "url": "file://*"
+                }
               ]
             },
             {
               "identifier": "opener:allow-reveal-item-in-dir",
               "allow": [
-                { "path": "$TEMP/*" }
+                {
+                  "path": "$TEMP/*"
+                }
               ]
             }
           ],
-          "platforms": ["linux", "macOS", "windows"]
+          "platforms": [
+            "linux",
+            "macOS",
+            "windows"
+          ]
         }
       ]
     }

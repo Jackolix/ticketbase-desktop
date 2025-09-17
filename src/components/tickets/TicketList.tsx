@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +11,7 @@ import { useTickets } from '@/contexts/TicketsContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
-import { Ticket } from '@/types/api';
+import { Ticket, Company } from '@/types/api';
 import { usePerformanceMonitor } from '@/utils/performanceMonitor';
 import {
   Search,
@@ -84,26 +84,6 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
   const ITEMS_PER_PAGE = 50;
 
-  // Restore scroll positions when component mounts or tab changes
-  useEffect(() => {
-    const restoreScrollPosition = (tab: 'my' | 'new' | 'all') => {
-      const container = scrollContainerRefs.current[tab];
-      if (container) {
-        const savedPosition = navigationState.scrollPositions[tab];
-        container.scrollTop = savedPosition;
-      }
-    };
-
-    // Small delay to ensure DOM elements are rendered
-    const timer = setTimeout(() => {
-      restoreScrollPosition('my');
-      restoreScrollPosition('new');
-      restoreScrollPosition('all');
-    }, 100);
-
-    return () => clearTimeout(timer);
-  }, [navigationState.scrollPositions]);
-
   // Track scroll position changes
   const handleScroll = useCallback((tab: 'my' | 'new' | 'all') => {
     const container = scrollContainerRefs.current[tab];
@@ -136,7 +116,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       try {
         const response = await apiClient.getCustomers();
         if (response.status === 'success' && 'customers' in response) {
-          setCustomers(response.customers);
+          setCustomers(response.customers as Company[]);
         }
       } catch (error) {
         console.error('Failed to load customers:', error);
@@ -453,6 +433,22 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     filteredAllTickets.slice(0, visibleItemCounts.all),
     [filteredAllTickets, visibleItemCounts.all]
   );
+
+  // Restore scroll positions immediately after DOM changes (before paint)
+  useLayoutEffect(() => {
+    const restoreScrollPosition = (tab: 'my' | 'new' | 'all') => {
+      const container = scrollContainerRefs.current[tab];
+      if (container) {
+        const savedPosition = navigationState.scrollPositions[tab];
+        container.scrollTop = savedPosition;
+      }
+    };
+
+    // Restore all scroll positions immediately
+    restoreScrollPosition('my');
+    restoreScrollPosition('new');
+    restoreScrollPosition('all');
+  }, [navigationState.scrollPositions, paginatedMyTickets.length, paginatedNewTickets.length, paginatedAllTickets.length]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -953,9 +949,16 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
         <TabsContent value="my" className="space-y-4">
           <div
-            ref={(el) => { scrollContainerRefs.current.my = el; }}
+            ref={(el) => {
+              scrollContainerRefs.current.my = el;
+              // Immediately restore scroll position when ref is set
+              if (el && navigationState.scrollPositions.my > 0) {
+                el.scrollTop = navigationState.scrollPositions.my;
+              }
+            }}
             onScroll={() => handleScroll('my')}
             className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+            style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
               <div className="flex items-center justify-center py-4">
@@ -999,9 +1002,16 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
         <TabsContent value="new" className="space-y-4">
           <div
-            ref={(el) => { scrollContainerRefs.current.new = el; }}
+            ref={(el) => {
+              scrollContainerRefs.current.new = el;
+              // Immediately restore scroll position when ref is set
+              if (el && navigationState.scrollPositions.new > 0) {
+                el.scrollTop = navigationState.scrollPositions.new;
+              }
+            }}
             onScroll={() => handleScroll('new')}
             className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+            style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
               <div className="flex items-center justify-center py-4">
@@ -1045,9 +1055,16 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
         <TabsContent value="all" className="space-y-4">
           <div
-            ref={(el) => { scrollContainerRefs.current.all = el; }}
+            ref={(el) => {
+              scrollContainerRefs.current.all = el;
+              // Immediately restore scroll position when ref is set
+              if (el && navigationState.scrollPositions.all > 0) {
+                el.scrollTop = navigationState.scrollPositions.all;
+              }
+            }}
             onScroll={() => handleScroll('all')}
             className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+            style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
               <div className="flex items-center justify-center py-4">

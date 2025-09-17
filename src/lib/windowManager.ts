@@ -106,7 +106,7 @@ export class WindowManager {
       const opener = await import('@tauri-apps/plugin-opener');
       const { tempDir } = await import('@tauri-apps/api/path');
       const { join } = await import('@tauri-apps/api/path');
-      const { writeFile, exists, remove } = await import('@tauri-apps/plugin-fs');
+      const { writeFile } = await import('@tauri-apps/plugin-fs');
 
       // Create unique filename to avoid conflicts
       const timestamp = Date.now();

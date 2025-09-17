@@ -117,8 +117,6 @@ export function FilePreviewModal({
     }
   };
 
-  const handleZoomIn = () => setZoom(prev => Math.min(prev + 25, 200));
-  const handleZoomOut = () => setZoom(prev => Math.max(prev - 25, 25));
   const handleRotate = () => setRotation(prev => (prev + 90) % 360);
   const handleReset = () => {
     setZoom(100);
