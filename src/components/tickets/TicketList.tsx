@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 
 interface TicketListProps {
-  onTicketSelect: (ticket: Ticket) => void;
+  onTicketSelect: (ticket: Ticket, preserveCurrentTab?: boolean) => void;
 }
 
 export function TicketList({ onTicketSelect }: TicketListProps) {
@@ -52,7 +52,10 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     allTicketsForSearch,
     setAllTicketsForSearch,
     customers,
-    setCustomers
+    setCustomers,
+    navigationState,
+    setActiveTab,
+    setScrollPosition
   } = useTickets();
   const { user } = useAuth();
   const perf = usePerformanceMonitor('TicketList');
@@ -68,7 +71,64 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   });
   const customerDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Refs for scroll containers
+  const scrollContainerRefs = useRef<{
+    my: HTMLDivElement | null;
+    new: HTMLDivElement | null;
+    all: HTMLDivElement | null;
+  }>({
+    my: null,
+    new: null,
+    all: null
+  });
+
   const ITEMS_PER_PAGE = 50;
+
+  // Restore scroll positions when component mounts or tab changes
+  useEffect(() => {
+    const restoreScrollPosition = (tab: 'my' | 'new' | 'all') => {
+      const container = scrollContainerRefs.current[tab];
+      if (container) {
+        const savedPosition = navigationState.scrollPositions[tab];
+        container.scrollTop = savedPosition;
+      }
+    };
+
+    // Small delay to ensure DOM elements are rendered
+    const timer = setTimeout(() => {
+      restoreScrollPosition('my');
+      restoreScrollPosition('new');
+      restoreScrollPosition('all');
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [navigationState.scrollPositions]);
+
+  // Track scroll position changes
+  const handleScroll = useCallback((tab: 'my' | 'new' | 'all') => {
+    const container = scrollContainerRefs.current[tab];
+    if (container) {
+      const position = container.scrollTop;
+      setScrollPosition(tab, position);
+    }
+  }, [setScrollPosition]);
+
+  // Handle tab changes
+  const handleTabChange = useCallback((value: string) => {
+    setActiveTab(value);
+  }, [setActiveTab]);
+
+  // Enhanced ticket select handler to preserve navigation state
+  const handleTicketSelect = useCallback((ticket: Ticket) => {
+    // Save current scroll position before navigating
+    const activeTab = navigationState.activeTab as 'my' | 'new' | 'all';
+    const container = scrollContainerRefs.current[activeTab];
+    if (container) {
+      setScrollPosition(activeTab, container.scrollTop);
+    }
+    // Preserve the current tab when selecting from within the TicketList
+    onTicketSelect(ticket, true);
+  }, [navigationState.activeTab, setScrollPosition, onTicketSelect]);
 
   // Load customers on mount
   useEffect(() => {
@@ -842,7 +902,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       </div>
 
       {/* Ticket Tabs */}
-      <Tabs defaultValue="my" className="space-y-4">
+      <Tabs value={navigationState.activeTab} onValueChange={handleTabChange} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3 h-11">
           <TabsTrigger
             value="my"
@@ -892,123 +952,141 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         </TabsList>
 
         <TabsContent value="my" className="space-y-4">
-          {isSearchingTicket && (
-            <div className="flex items-center justify-center py-4">
-              <div className="text-sm text-muted-foreground">Searching for ticket...</div>
-            </div>
-          )}
-          {paginatedMyTickets.map((ticket) => (
-            <TicketItem
-              key={ticket.id}
-              ticket={ticket}
-              onSelect={onTicketSelect}
-              onOpenInNewWindow={handleOpenInNewWindow}
-              currentUserName={user?.name}
-            />
-          ))}
+          <div
+            ref={(el) => { scrollContainerRefs.current.my = el; }}
+            onScroll={() => handleScroll('my')}
+            className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+          >
+            {isSearchingTicket && (
+              <div className="flex items-center justify-center py-4">
+                <div className="text-sm text-muted-foreground">Searching for ticket...</div>
+              </div>
+            )}
+            {paginatedMyTickets.map((ticket) => (
+              <TicketItem
+                key={ticket.id}
+                ticket={ticket}
+                onSelect={handleTicketSelect}
+                onOpenInNewWindow={handleOpenInNewWindow}
+                currentUserName={user?.name}
+              />
+            ))}
 
-          {/* Load More Button */}
-          {filteredMyTickets.length > paginatedMyTickets.length && (
-            <div className="flex justify-center py-4">
-              <Button
-                variant="outline"
-                onClick={() => loadMoreTickets('my')}
-                className="flex items-center gap-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Load More ({filteredMyTickets.length - paginatedMyTickets.length} remaining)
-              </Button>
-            </div>
-          )}
+            {/* Load More Button */}
+            {filteredMyTickets.length > paginatedMyTickets.length && (
+              <div className="flex justify-center py-4">
+                <Button
+                  variant="outline"
+                  onClick={() => loadMoreTickets('my')}
+                  className="flex items-center gap-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Load More ({filteredMyTickets.length - paginatedMyTickets.length} remaining)
+                </Button>
+              </div>
+            )}
 
-          {filteredMyTickets.length === 0 && !isSearchingTicket && (
-            <Card>
-              <CardContent className="p-8 text-center">
-                <User className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No tickets assigned to you</p>
-              </CardContent>
-            </Card>
-          )}
+            {filteredMyTickets.length === 0 && !isSearchingTicket && (
+              <Card>
+                <CardContent className="p-8 text-center">
+                  <User className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">No tickets assigned to you</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="new" className="space-y-4">
-          {isSearchingTicket && (
-            <div className="flex items-center justify-center py-4">
-              <div className="text-sm text-muted-foreground">Searching for ticket...</div>
-            </div>
-          )}
-          {paginatedNewTickets.map((ticket) => (
-            <TicketItem
-              key={ticket.id}
-              ticket={ticket}
-              onSelect={onTicketSelect}
-              onOpenInNewWindow={handleOpenInNewWindow}
-              currentUserName={user?.name}
-            />
-          ))}
+          <div
+            ref={(el) => { scrollContainerRefs.current.new = el; }}
+            onScroll={() => handleScroll('new')}
+            className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+          >
+            {isSearchingTicket && (
+              <div className="flex items-center justify-center py-4">
+                <div className="text-sm text-muted-foreground">Searching for ticket...</div>
+              </div>
+            )}
+            {paginatedNewTickets.map((ticket) => (
+              <TicketItem
+                key={ticket.id}
+                ticket={ticket}
+                onSelect={handleTicketSelect}
+                onOpenInNewWindow={handleOpenInNewWindow}
+                currentUserName={user?.name}
+              />
+            ))}
 
-          {/* Load More Button */}
-          {filteredNewTickets.length > paginatedNewTickets.length && (
-            <div className="flex justify-center py-4">
-              <Button
-                variant="outline"
-                onClick={() => loadMoreTickets('new')}
-                className="flex items-center gap-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Load More ({filteredNewTickets.length - paginatedNewTickets.length} remaining)
-              </Button>
-            </div>
-          )}
+            {/* Load More Button */}
+            {filteredNewTickets.length > paginatedNewTickets.length && (
+              <div className="flex justify-center py-4">
+                <Button
+                  variant="outline"
+                  onClick={() => loadMoreTickets('new')}
+                  className="flex items-center gap-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Load More ({filteredNewTickets.length - paginatedNewTickets.length} remaining)
+                </Button>
+              </div>
+            )}
 
-          {filteredNewTickets.length === 0 && !isSearchingTicket && (
-            <Card>
-              <CardContent className="p-8 text-center">
-                <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No new tickets</p>
-              </CardContent>
-            </Card>
-          )}
+            {filteredNewTickets.length === 0 && !isSearchingTicket && (
+              <Card>
+                <CardContent className="p-8 text-center">
+                  <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">No new tickets</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="all" className="space-y-4">
-          {isSearchingTicket && (
-            <div className="flex items-center justify-center py-4">
-              <div className="text-sm text-muted-foreground">Searching for ticket...</div>
-            </div>
-          )}
-          {paginatedAllTickets.map((ticket) => (
-            <TicketItem
-              key={ticket.id}
-              ticket={ticket}
-              onSelect={onTicketSelect}
-              onOpenInNewWindow={handleOpenInNewWindow}
-              currentUserName={user?.name}
-            />
-          ))}
+          <div
+            ref={(el) => { scrollContainerRefs.current.all = el; }}
+            onScroll={() => handleScroll('all')}
+            className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+          >
+            {isSearchingTicket && (
+              <div className="flex items-center justify-center py-4">
+                <div className="text-sm text-muted-foreground">Searching for ticket...</div>
+              </div>
+            )}
+            {paginatedAllTickets.map((ticket) => (
+              <TicketItem
+                key={ticket.id}
+                ticket={ticket}
+                onSelect={handleTicketSelect}
+                onOpenInNewWindow={handleOpenInNewWindow}
+                currentUserName={user?.name}
+              />
+            ))}
 
-          {/* Load More Button */}
-          {filteredAllTickets.length > paginatedAllTickets.length && (
-            <div className="flex justify-center py-4">
-              <Button
-                variant="outline"
-                onClick={() => loadMoreTickets('all')}
-                className="flex items-center gap-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Load More ({filteredAllTickets.length - paginatedAllTickets.length} remaining)
-              </Button>
-            </div>
-          )}
+            {/* Load More Button */}
+            {filteredAllTickets.length > paginatedAllTickets.length && (
+              <div className="flex justify-center py-4">
+                <Button
+                  variant="outline"
+                  onClick={() => loadMoreTickets('all')}
+                  className="flex items-center gap-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Load More ({filteredAllTickets.length - paginatedAllTickets.length} remaining)
+                </Button>
+              </div>
+            )}
 
-          {filteredAllTickets.length === 0 && !isSearchingTicket && (
-            <Card>
-              <CardContent className="p-8 text-center">
-                <div className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No tickets available</p>
-              </CardContent>
-            </Card>
-          )}
+            {filteredAllTickets.length === 0 && !isSearchingTicket && (
+              <Card>
+                <CardContent className="p-8 text-center">
+                  <div className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">No tickets available</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
     </div>

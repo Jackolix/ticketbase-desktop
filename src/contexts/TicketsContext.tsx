@@ -16,6 +16,15 @@ interface FilterState {
   sortBy: string;
 }
 
+interface NavigationState {
+  activeTab: string;
+  scrollPositions: {
+    my: number;
+    new: number;
+    all: number;
+  };
+}
+
 interface TicketsContextType {
   tickets: {
     new_tickets: Ticket[];
@@ -37,6 +46,11 @@ interface TicketsContextType {
   filterState: FilterState;
   updateFilterState: (updates: Partial<FilterState>) => void;
   clearFilters: () => void;
+  // Navigation state management
+  navigationState: NavigationState;
+  updateNavigationState: (updates: Partial<NavigationState>) => void;
+  setActiveTab: (tab: string) => void;
+  setScrollPosition: (tab: 'my' | 'new' | 'all', position: number) => void;
   // Additional ticket data for filtering
   allTicketsForSearch: {
     new_tickets: Ticket[];
@@ -66,6 +80,15 @@ const defaultFilterState: FilterState = {
   sortBy: 'date-desc'
 };
 
+const defaultNavigationState: NavigationState = {
+  activeTab: 'my',
+  scrollPositions: {
+    my: 0,
+    new: 0,
+    all: 0
+  }
+};
+
 export function TicketsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [tickets, setTickets] = useState<{
@@ -85,6 +108,9 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     all_tickets: Ticket[];
   } | null>(null);
   const [customers, setCustomers] = useState<Company[]>([]);
+
+  // Navigation state management
+  const [navigationState, setNavigationState] = useState<NavigationState>(defaultNavigationState);
 
   const fetchTickets = useCallback(async (isBackground = false) => {
     if (!user) return;
@@ -183,6 +209,33 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Navigation state management functions
+  const updateNavigationState = useCallback((updates: Partial<NavigationState>) => {
+    setNavigationState(prev => {
+      const newState = { ...prev, ...updates };
+      // Save to sessionStorage
+      try {
+        sessionStorage.setItem('ticketNavigationState', JSON.stringify(newState));
+      } catch (error) {
+        console.warn('Failed to save navigation state:', error);
+      }
+      return newState;
+    });
+  }, []);
+
+  const setActiveTab = useCallback((tab: string) => {
+    updateNavigationState({ activeTab: tab });
+  }, [updateNavigationState]);
+
+  const setScrollPosition = useCallback((tab: 'my' | 'new' | 'all', position: number) => {
+    updateNavigationState({
+      scrollPositions: {
+        ...navigationState.scrollPositions,
+        [tab]: position
+      }
+    });
+  }, [navigationState.scrollPositions, updateNavigationState]);
+
   const loadAllTicketsForSearch = useCallback(async () => {
     if (!user) return { new_tickets: [], my_tickets: [], all_tickets: [] };
 
@@ -223,6 +276,19 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (error) {
       console.warn('Failed to restore filter state:', error);
+    }
+  }, []);
+
+  // Restore navigation state from sessionStorage on mount
+  useEffect(() => {
+    try {
+      const savedState = sessionStorage.getItem('ticketNavigationState');
+      if (savedState) {
+        const parsed = JSON.parse(savedState);
+        setNavigationState(parsed);
+      }
+    } catch (error) {
+      console.warn('Failed to restore navigation state:', error);
     }
   }, []);
 
@@ -273,6 +339,11 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     filterState,
     updateFilterState,
     clearFilters,
+    // Navigation state management
+    navigationState,
+    updateNavigationState,
+    setActiveTab,
+    setScrollPosition,
     // Additional data for filtering
     allTicketsForSearch,
     setAllTicketsForSearch,

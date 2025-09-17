@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import "./App.css";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import { TicketsProvider } from "./contexts/TicketsContext";
+import { TicketsProvider, useTickets } from "./contexts/TicketsContext";
 import { UpdaterProvider } from "./contexts/UpdaterContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import { CustomLoginForm } from "./components/auth/CustomLoginForm";
@@ -30,6 +30,7 @@ import { apiClient } from "./lib/api";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
+  const { setActiveTab, tickets, allTicketsForSearch, filterState } = useTickets();
   const [currentView, setCurrentView] = useState("dashboard");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
@@ -154,7 +155,32 @@ function AppContent() {
     }
   };
 
-  const handleTicketSelect = (ticket: Ticket) => {
+  const handleTicketSelect = (ticket: Ticket, preserveCurrentTab?: boolean) => {
+    // Only determine which tab this ticket belongs to if we're not preserving the current tab
+    if (!preserveCurrentTab) {
+      // First check if we're using advanced filters and have expanded ticket data
+      let isMyTicket = false;
+      let isNewTicket = false;
+
+      if (filterState.customerFilter && allTicketsForSearch) {
+        // When using advanced filters, check the expanded ticket data
+        isMyTicket = allTicketsForSearch.my_tickets.some(t => t.id === ticket.id);
+        isNewTicket = allTicketsForSearch.new_tickets.some(t => t.id === ticket.id);
+      } else {
+        // For normal browsing, check the main ticket lists
+        isMyTicket = tickets.my_tickets.some(t => t.id === ticket.id);
+        isNewTicket = tickets.new_tickets.some(t => t.id === ticket.id);
+      }
+
+      if (isMyTicket) {
+        setActiveTab('my');
+      } else if (isNewTicket) {
+        setActiveTab('new');
+      } else {
+        setActiveTab('all');
+      }
+    }
+
     setSelectedTicket(ticket);
     setCurrentView("tickets");
   };

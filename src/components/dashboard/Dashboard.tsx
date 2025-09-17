@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 interface DashboardProps {
-  onTicketSelect: (ticket: Ticket) => void;
+  onTicketSelect: (ticket: Ticket, preserveCurrentTab?: boolean) => void;
 }
 
 export function Dashboard({ onTicketSelect }: DashboardProps) {
