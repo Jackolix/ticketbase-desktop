@@ -147,14 +147,30 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
       }, 5000);
       
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      
-      if (errorMessage.includes('Could not fetch a valid release JSON')) {
+      let errorMessage = 'Unknown error occurred';
+
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      } else if (error && typeof error === 'object') {
+        errorMessage = JSON.stringify(error);
+      }
+
+      console.error('Update check error:', error);
+      console.error('Error message:', errorMessage);
+
+      if (errorMessage.includes('Could not fetch a valid release JSON') ||
+          errorMessage.includes('404') ||
+          errorMessage.includes('Not Found')) {
         setLastError('No update manifest found. This is normal until a new release is published with updater support.');
         setDebugInfo('Missing latest.json file - waiting for new release');
-      } else if (errorMessage.includes('timeout')) {
+      } else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
         setLastError('Update check timed out. Please check your internet connection.');
         setDebugInfo('Connection timeout after 30 seconds');
+      } else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+        setLastError('Network error. Please check your internet connection.');
+        setDebugInfo(`Network error: ${errorMessage}`);
       } else {
         setLastError(`Update check failed: ${errorMessage}`);
         setDebugInfo(`Error: ${errorMessage}`);

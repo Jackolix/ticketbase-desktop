@@ -35,6 +35,8 @@
             "core:window:allow-close",
             "notification:default",
             "notification:allow-request-permission",
+            "updater:default",
+            "updater:allow-check",
             "fs:allow-write-file",
             "fs:allow-read-file",
             "fs:allow-create",
