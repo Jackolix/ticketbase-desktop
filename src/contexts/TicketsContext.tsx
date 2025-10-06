@@ -4,6 +4,47 @@ import { apiClient } from '@/lib/api';
 import { Ticket, Company } from '@/types/api';
 import { performanceMonitor } from '@/utils/performanceMonitor';
 
+// Helper hook to get notification settings without circular dependency
+function useNotificationSettings() {
+  const [settings, setSettings] = useState<{ ticketRefreshInterval: number }>(() => {
+    const stored = localStorage.getItem('notification-settings');
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        return { ticketRefreshInterval: parsed.ticketRefreshInterval || 30 };
+      } catch {
+        // Fallback to defaults
+      }
+    }
+    return { ticketRefreshInterval: 30 };
+  });
+
+  useEffect(() => {
+    const handleStorageChange = () => {
+      const stored = localStorage.getItem('notification-settings');
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          setSettings({ ticketRefreshInterval: parsed.ticketRefreshInterval || 30 });
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    // Also listen for custom events for same-window updates
+    window.addEventListener('notification-settings-changed', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('notification-settings-changed', handleStorageChange);
+    };
+  }, []);
+
+  return settings;
+}
+
 interface FilterState {
   searchTerm: string;
   statusFilter: string;
@@ -91,6 +132,7 @@ const defaultNavigationState: NavigationState = {
 
 export function TicketsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  const notificationSettings = useNotificationSettings();
   const [tickets, setTickets] = useState<{
     new_tickets: Ticket[];
     my_tickets: Ticket[];
@@ -299,16 +341,17 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user, fetchTickets]);
 
-  // Background refresh every 30 seconds
+  // Background refresh based on user setting
   useEffect(() => {
     if (!user) return;
 
+    const intervalMs = notificationSettings.ticketRefreshInterval * 1000;
     const interval = setInterval(() => {
       refreshTickets();
-    }, 30000); // 30 seconds
+    }, intervalMs);
 
     return () => clearInterval(interval);
-  }, [user, refreshTickets]);
+  }, [user, refreshTickets, notificationSettings.ticketRefreshInterval]);
 
   // Refresh when window comes back into focus
   useEffect(() => {

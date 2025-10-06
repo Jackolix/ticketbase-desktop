@@ -7,14 +7,15 @@ import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUpdater } from '@/contexts/UpdaterContext';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { apiClient } from '@/lib/api';
-import { 
-  User, 
-  Mail, 
-  Lock, 
+import {
+  User,
+  Mail,
+  Lock,
   Bell,
   Info,
   RefreshCw,
@@ -22,7 +23,8 @@ import {
   CheckCircle,
   AlertCircle,
   Volume2,
-  Monitor
+  Monitor,
+  Clock
 } from 'lucide-react';
 
 export function Settings() {
@@ -406,6 +408,31 @@ export function Settings() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              <div className="space-y-2 pt-4 border-t">
+                <Label htmlFor="refresh-interval" className="flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  Ticket Refresh Interval
+                </Label>
+                <p className="text-sm text-muted-foreground mb-2">
+                  How often to check for new tickets
+                </p>
+                <Select
+                  value={(settings.ticketRefreshInterval ?? 30).toString()}
+                  onValueChange={(value) => updateSettings({ ticketRefreshInterval: parseInt(value) })}
+                >
+                  <SelectTrigger id="refresh-interval">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="15">Every 15 seconds</SelectItem>
+                    <SelectItem value="30">Every 30 seconds</SelectItem>
+                    <SelectItem value="60">Every 1 minute</SelectItem>
+                    <SelectItem value="120">Every 2 minutes</SelectItem>
+                    <SelectItem value="300">Every 5 minutes</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="pt-4 border-t">

@@ -10,6 +10,7 @@ interface NotificationSettings {
   enableAssignedTicketNotifications: boolean;
   enableSound: boolean;
   soundVolume: number;
+  ticketRefreshInterval: number; // in seconds
 }
 
 interface NotificationContextType {
@@ -29,20 +30,25 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const { tickets, lastUpdated } = useTickets();
   
   const [settings, setSettings] = useState<NotificationSettings>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch {
-        // Fallback to defaults if parsing fails
-      }
-    }
-    return {
+    const defaults = {
       enableNewTicketNotifications: true,
       enableAssignedTicketNotifications: true,
       enableSound: true,
       soundVolume: 0.5,
+      ticketRefreshInterval: 30, // Default 30 seconds
     };
+
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        // Merge with defaults to handle missing properties from old versions
+        return { ...defaults, ...parsed };
+      } catch {
+        // Fallback to defaults if parsing fails
+      }
+    }
+    return defaults;
   });
 
   const previousTicketsRef = useRef<{
@@ -55,6 +61,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    // Dispatch custom event for same-window updates
+    window.dispatchEvent(new Event('notification-settings-changed'));
   }, [settings]);
 
   useEffect(() => {

@@ -134,18 +134,7 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                     asChild
                     isActive={item.isActive}
                     tooltip={item.title}
-                    className={`
-                      h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent
-                      group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center
-                      ${item.isActive 
-                        ? 'bg-sidebar-accent !text-sidebar-accent-foreground border border-sidebar-border shadow-sm' 
-                        : '!text-sidebar-foreground hover:bg-sidebar-accent/50 hover:!text-sidebar-accent-foreground'
-                      }
-                      ${item.variant === 'default' 
-                        ? 'bg-sidebar-primary !text-sidebar-primary-foreground border border-sidebar-border' 
-                        : ''
-                      }
-                    `}
+                    className={`h-10 px-3 ${item.variant === 'default' ? 'bg-sidebar-primary text-sidebar-primary-foreground' : ''}`}
                   >
                     <a href="#" onClick={(e) => handleNavClick(item.url, e)} className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
                       <item.icon className={`h-4 w-4 shrink-0 ${item.isActive ? 'animate-pulse' : ''}`} />
@@ -172,14 +161,7 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                   asChild
                   isActive={currentView === "settings"}
                   tooltip="Settings"
-                  className={`
-                    h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent
-                    group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center
-                    ${currentView === "settings" 
-                      ? 'bg-sidebar-accent !text-sidebar-accent-foreground border border-sidebar-border shadow-sm' 
-                      : '!text-sidebar-foreground hover:bg-sidebar-accent/50 hover:!text-sidebar-accent-foreground'
-                    }
-                  `}
+                  className="h-10 px-3"
                 >
                   <a href="#" onClick={(e) => handleNavClick("settings", e)} className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
                     <Settings className="h-4 w-4 shrink-0" />
@@ -192,10 +174,11 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                 <SidebarMenuButton
                   asChild
                   tooltip={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent !text-sidebar-foreground hover:!text-sidebar-accent-foreground group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+                  className="h-10 px-3"
                 >
-                  <button
-                    onClick={toggleTheme}
+                  <a
+                    href="#"
+                    onClick={(e) => { e.preventDefault(); toggleTheme(); }}
                     className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center"
                   >
                     {theme === 'dark' ? (
@@ -206,7 +189,7 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                     <span className="font-medium group-data-[collapsible=icon]:sr-only">
                       {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
                     </span>
-                  </button>
+                  </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               
@@ -214,13 +197,13 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                 <SidebarMenuButton
                   asChild
                   tooltip="Notifications"
-                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent !text-sidebar-foreground hover:!text-sidebar-accent-foreground group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+                  className="h-10 px-3"
                 >
-                  <button className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
+                  <a href="#" className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
                     <Bell className="h-4 w-4 shrink-0" />
                     <span className="font-medium group-data-[collapsible=icon]:sr-only">Notifications</span>
                     <div className="ml-auto w-2 h-2 bg-destructive rounded-full animate-pulse group-data-[collapsible=icon]:hidden" />
-                  </button>
+                  </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
@@ -228,12 +211,12 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                 <SidebarMenuButton
                   asChild
                   tooltip="Start Work Session"
-                  className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-sidebar-accent !text-sidebar-foreground hover:!text-sidebar-accent-foreground group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+                  className="h-10 px-3"
                 >
-                  <button className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
+                  <a href="#" className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
                     <Play className="h-4 w-4 shrink-0" />
                     <span className="font-medium group-data-[collapsible=icon]:sr-only">Start Work</span>
-                  </button>
+                  </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>

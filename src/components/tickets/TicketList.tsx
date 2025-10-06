@@ -42,9 +42,6 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
   const {
     tickets,
     isLoading,
-    isRefreshing,
-    refreshTickets,
-    lastUpdated,
     loadAllTicketsForSearch,
     filterState,
     updateFilterState,
@@ -702,26 +699,6 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     <div className="space-y-6">
       {/* Header */}
       <div className="space-y-4">
-        <div className="flex items-center justify-end">
-          {lastUpdated && (
-            <span className="text-sm text-muted-foreground mr-2">
-              Last updated: {lastUpdated.toLocaleTimeString()}
-            </span>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={refreshTickets}
-            disabled={isRefreshing}
-          >
-            {isRefreshing ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
-
         {/* Filters */}
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row gap-4">
@@ -735,49 +712,6 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 style={{ paddingLeft: '2.75rem' }}
               />
             </div>
-            <Select value={filterState.statusFilter} onValueChange={(value) => updateFilterState({ statusFilter: value })}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Statuses</SelectItem>
-                <SelectItem value="neu">Neu</SelectItem>
-                <SelectItem value="ausstehend">Ausstehend</SelectItem>
-                <SelectItem value="warten auf rückmeldung vom ticketbenutzer">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
-                <SelectItem value="warten auf rückmeldung (extern)">Warten auf Rückmeldung (Extern)</SelectItem>
-                <SelectItem value="terminiert">Terminiert</SelectItem>
-                <SelectItem value="abgeschlossen">Abgeschlossen</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={filterState.priorityFilter} onValueChange={(value) => updateFilterState({ priorityFilter: value })}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="Filter by priority" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Priorities</SelectItem>
-                <SelectItem value="very_high">Very High</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-                <SelectItem value="normal">Normal</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={filterState.sortBy} onValueChange={(value) => updateFilterState({ sortBy: value })}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <ArrowUpDown className="h-4 w-4 mr-2" />
-                <SelectValue placeholder="Sort by" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="date-desc">Date (Newest)</SelectItem>
-                <SelectItem value="date-asc">Date (Oldest)</SelectItem>
-                <SelectItem value="priority-high">Priority (High)</SelectItem>
-                <SelectItem value="priority-low">Priority (Low)</SelectItem>
-                <SelectItem value="id-desc">ID (Highest)</SelectItem>
-                <SelectItem value="id-asc">ID (Lowest)</SelectItem>
-                <SelectItem value="company-asc">Company (A-Z)</SelectItem>
-                <SelectItem value="company-desc">Company (Z-A)</SelectItem>
-                <SelectItem value="status-asc">Status (A-Z)</SelectItem>
-                <SelectItem value="status-desc">Status (Z-A)</SelectItem>
-              </SelectContent>
-            </Select>
             <Button
               variant="outline"
               onClick={() => updateFilterState({ showAdvancedFilters: !filterState.showAdvancedFilters })}
@@ -899,53 +833,92 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
       {/* Ticket Tabs */}
       <Tabs value={navigationState.activeTab} onValueChange={handleTabChange} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 h-11">
-          <TabsTrigger
-            value="my"
-            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-          >
-            <User className="w-4 h-4 mr-2" />
-            My Tickets
-            {tickets.my_tickets.length > 0 && (
-              <Badge
-                variant="outline"
-                className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
-              >
+        <div className="flex items-center justify-between gap-4">
+          <TabsList>
+            <TabsTrigger value="my">
+              <User className="w-4 h-4 mr-2" />
+              My Tickets
+              {tickets.my_tickets.length > 0 && (
+                <Badge
+                  variant="outline"
+                  className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
+                >
 {filteredMyTickets.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger
-            value="new"
-            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-          >
-            <AlertCircle className="w-4 h-4 mr-2" />
-            New Tickets
-            {tickets.new_tickets.length > 0 && (
-              <Badge
-                variant="outline"
-                className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
-              >
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="new">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              New Tickets
+              {tickets.new_tickets.length > 0 && (
+                <Badge
+                  variant="outline"
+                  className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
+                >
 {filteredNewTickets.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger
-            value="all"
-            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium relative"
-          >
-            <Tickets className="w-4 h-4 mr-2" />
-            All Tickets
-            {tickets.all_tickets.length > 0 && (
-              <Badge
-                variant="outline"
-                className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
-              >
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="all">
+              <Tickets className="w-4 h-4 mr-2" />
+              All Tickets
+              {tickets.all_tickets.length > 0 && (
+                <Badge
+                  variant="outline"
+                  className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
+                >
 {filteredAllTickets.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="flex items-center gap-2">
+            <Select value={filterState.statusFilter} onValueChange={(value) => updateFilterState({ statusFilter: value })}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="neu">Neu</SelectItem>
+                <SelectItem value="ausstehend">Ausstehend</SelectItem>
+                <SelectItem value="warten auf rückmeldung vom ticketbenutzer">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
+                <SelectItem value="warten auf rückmeldung (extern)">Warten auf Rückmeldung (Extern)</SelectItem>
+                <SelectItem value="terminiert">Terminiert</SelectItem>
+                <SelectItem value="abgeschlossen">Abgeschlossen</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={filterState.priorityFilter} onValueChange={(value) => updateFilterState({ priorityFilter: value })}>
+              <SelectTrigger className="w-[120px]">
+                <SelectValue placeholder="Priority" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Priorities</SelectItem>
+                <SelectItem value="very_high">Very High</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="normal">Normal</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={filterState.sortBy} onValueChange={(value) => updateFilterState({ sortBy: value })}>
+              <SelectTrigger className="w-[140px]">
+                <ArrowUpDown className="h-4 w-4 mr-2" />
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="date-desc">Date (Newest)</SelectItem>
+                <SelectItem value="date-asc">Date (Oldest)</SelectItem>
+                <SelectItem value="priority-high">Priority (High)</SelectItem>
+                <SelectItem value="priority-low">Priority (Low)</SelectItem>
+                <SelectItem value="id-desc">ID (Highest)</SelectItem>
+                <SelectItem value="id-asc">ID (Lowest)</SelectItem>
+                <SelectItem value="company-asc">Company (A-Z)</SelectItem>
+                <SelectItem value="company-desc">Company (Z-A)</SelectItem>
+                <SelectItem value="status-asc">Status (A-Z)</SelectItem>
+                <SelectItem value="status-desc">Status (Z-A)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
 
         <TabsContent value="my" className="space-y-4">
           <div
@@ -957,7 +930,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               }
             }}
             onScroll={() => handleScroll('my')}
-            className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+            className="space-y-4 max-h-[calc(100vh-180px)] overflow-y-auto"
             style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
@@ -1010,7 +983,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               }
             }}
             onScroll={() => handleScroll('new')}
-            className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+            className="space-y-4 max-h-[calc(100vh-180px)] overflow-y-auto"
             style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
@@ -1063,7 +1036,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               }
             }}
             onScroll={() => handleScroll('all')}
-            className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto"
+            className="space-y-4 max-h-[calc(100vh-180px)] overflow-y-auto"
             style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
