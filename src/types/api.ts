@@ -50,7 +50,7 @@ export interface Ticket {
   ticketUserPhone: string;
   playStatus?: string;
   ticketTerminatedUser: string;
-  attachments: string[];
+  attachments: (string | { attachment?: string; filename?: string; path?: string })[];
   subject: string;
   priority: string;
   index: number;

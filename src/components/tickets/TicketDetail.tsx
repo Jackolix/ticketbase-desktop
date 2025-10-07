@@ -277,6 +277,21 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     }
   };
 
+  // Helper function to safely render values that might be objects
+  const safeRender = (value: any): string => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number') return String(value);
+    if (typeof value === 'object') {
+      // If it's an object, try common property names
+      if ('filename' in value) return value.filename;
+      if ('name' in value) return value.name;
+      if ('value' in value) return value.value;
+      return JSON.stringify(value);
+    }
+    return String(value);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -290,16 +305,16 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
               #{ticket.id}
             </Badge>
             <Badge variant={getStatusColor(ticket.status)}>
-              {ticket.status}
+              {safeRender(ticket.status)}
             </Badge>
             {ticket.priority && (
               <Badge variant="outline">
-                {ticket.priority}
+                {safeRender(ticket.priority)}
               </Badge>
             )}
           </div>
-          <h1 className="text-2xl font-bold">{ticket.summary}</h1>
-          <p className="text-muted-foreground">{ticket.subject}</p>
+          <h1 className="text-2xl font-bold">{safeRender(ticket.summary)}</h1>
+          <p className="text-muted-foreground">{safeRender(ticket.subject)}</p>
         </div>
         <Button variant="outline" size="icon" onClick={handleOpenInNewWindow}>
           <ExternalLink className="h-4 w-4" />
@@ -352,39 +367,48 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                         Attachments
                       </h4>
                       <div className="space-y-2">
-                        {ticket.attachments.map((filename, index) => (
-                          <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded hover:bg-muted/80 transition-colors group">
-                            <Paperclip className="h-4 w-4 text-muted-foreground" />
-                            <span className="text-sm flex-1 cursor-pointer" onClick={() => handlePreviewAttachment(filename)}>
-                              {filename}
-                            </span>
-                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 p-0"
-                                onClick={() => handlePreviewAttachment(filename)}
-                                title="Preview file"
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 p-0"
-                                onClick={() => handleDownloadAttachment(filename)}
-                                disabled={downloadingFiles.has(filename)}
-                                title="Download file"
-                              >
-                                {downloadingFiles.has(filename) ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Download className="h-4 w-4" />
-                                )}
-                              </Button>
+                        {ticket.attachments.map((attachment, index) => {
+                          let filename = '';
+                          if (typeof attachment === 'string') {
+                            filename = attachment;
+                          } else if (attachment && typeof attachment === 'object') {
+                            // Handle object attachments - extract filename from various possible properties
+                            filename = safeRender(attachment.filename || attachment.attachment || attachment);
+                          }
+                          return (
+                            <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded hover:bg-muted/80 transition-colors group">
+                              <Paperclip className="h-4 w-4 text-muted-foreground" />
+                              <span className="text-sm flex-1 cursor-pointer" onClick={() => handlePreviewAttachment(filename)}>
+                                {filename}
+                              </span>
+                              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0"
+                                  onClick={() => handlePreviewAttachment(filename)}
+                                  title="Preview file"
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0"
+                                  onClick={() => handleDownloadAttachment(filename)}
+                                  disabled={downloadingFiles.has(filename)}
+                                  title="Download file"
+                                >
+                                  {downloadingFiles.has(filename) ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Download className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -402,18 +426,18 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                         <Building className="h-4 w-4 text-muted-foreground" />
                         <span className="font-medium">Company</span>
                       </div>
-                      <p>{ticket.company.name}</p>
-                      <p className="text-sm text-muted-foreground">{ticket.company.companyAdress}</p>
-                      <p className="text-sm text-muted-foreground">{ticket.company.companyZip}</p>
+                      <p>{safeRender(ticket.company.name)}</p>
+                      <p className="text-sm text-muted-foreground">{safeRender(ticket.company.companyAdress)}</p>
+                      <p className="text-sm text-muted-foreground">{safeRender(ticket.company.companyZip)}</p>
                       {ticket.company.companyPhone && (
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Phone className="h-3 w-3" />
-                          <span>{ticket.company.companyPhone}</span>
+                          <span>{safeRender(ticket.company.companyPhone)}</span>
                         </div>
                       )}
                       {ticket.company.companyMail && (
                         <p className="text-sm text-muted-foreground break-all">
-                          {ticket.company.companyMail}
+                          {safeRender(ticket.company.companyMail)}
                         </p>
                       )}
                     </div>
@@ -422,11 +446,11 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                         <User className="h-4 w-4 text-muted-foreground" />
                         <span className="font-medium">Contact</span>
                       </div>
-                      <p>{ticket.ticketUser}</p>
+                      <p>{safeRender(ticket.ticketUser)}</p>
                       {ticket.ticketUserPhone && (
                         <div className="flex items-center gap-2">
                           <Phone className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm">{ticket.ticketUserPhone}</span>
+                          <span className="text-sm">{safeRender(ticket.ticketUserPhone)}</span>
                         </div>
                       )}
                     </div>
@@ -669,18 +693,18 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                 )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Creator:</span>
-                  <span>{ticket.ticketCreator}</span>
+                  <span>{safeRender(ticket.ticketCreator)}</span>
                 </div>
                 {ticket.ticketTerminatedUser && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Assigned:</span>
-                    <span>{ticket.ticketTerminatedUser}</span>
+                    <span>{safeRender(ticket.ticketTerminatedUser)}</span>
                   </div>
                 )}
                 {ticket.pool_name && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Pool:</span>
-                    <span>{ticket.pool_name}</span>
+                    <span>{safeRender(ticket.pool_name)}</span>
                   </div>
                 )}
                 {ticket.ticketMessagesCount > 0 && (
