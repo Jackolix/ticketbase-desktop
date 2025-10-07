@@ -5,13 +5,15 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { Ticket } from '@/types/api';
-import { 
-  Ticket as TicketIcon, 
-  AlertCircle, 
+import {
+  Ticket as TicketIcon,
+  AlertCircle,
   TrendingUp,
   Calendar,
   User,
-  Building
+  Building,
+  Activity,
+  Clock
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -26,6 +28,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
     all_tickets: Ticket[];
   }>({ new_tickets: [], my_tickets: [], all_tickets: [] });
   const [isLoading, setIsLoading] = useState(true);
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
 
   useEffect(() => {
     fetchTickets();
@@ -33,7 +36,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
 
   const fetchTickets = async () => {
     if (!user) return;
-    
+
     try {
       const response = await apiClient.getTickets(
         user.id,
@@ -44,6 +47,20 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
         user.sub_user_group_id
       );
       setTickets(response);
+
+      // Fetch recent activity from all tickets
+      const allTickets = [...response.my_tickets, ...response.new_tickets, ...response.all_tickets];
+      const activities = allTickets
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 10)
+        .map(ticket => ({
+          id: ticket.id,
+          type: 'ticket_created',
+          ticket,
+          timestamp: ticket.created_at,
+          description: `Ticket #${ticket.id} created`,
+        }));
+      setRecentActivity(activities);
     } catch (error) {
       console.error('Failed to fetch tickets:', error);
     } finally {
@@ -240,6 +257,57 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Activity Feed */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Activity className="h-5 w-5" />
+            Recent Activity
+          </CardTitle>
+          <CardDescription>
+            Latest updates and ticket activities
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {recentActivity.map((activity) => (
+              <div
+                key={`${activity.type}-${activity.id}`}
+                className="flex items-start gap-4 p-3 border-l-2 border-muted hover:border-primary transition-colors cursor-pointer"
+                onClick={() => onTicketSelect(activity.ticket)}
+              >
+                <div className="mt-0.5">
+                  {activity.type === 'ticket_created' && (
+                    <TicketIcon className="h-5 w-5 text-blue-500" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge variant="outline">#{activity.ticket.id}</Badge>
+                    <Badge variant={getStatusColor(activity.ticket.status)}>
+                      {activity.ticket.status}
+                    </Badge>
+                  </div>
+                  <p className="font-medium truncate">{activity.ticket.summary}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {activity.ticket.company.name}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground shrink-0">
+                  <Clock className="h-3 w-3" />
+                  <span>{new Date(activity.timestamp).toLocaleDateString('de-DE')}</span>
+                </div>
+              </div>
+            ))}
+            {recentActivity.length === 0 && (
+              <p className="text-center text-muted-foreground py-8">
+                No recent activity
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

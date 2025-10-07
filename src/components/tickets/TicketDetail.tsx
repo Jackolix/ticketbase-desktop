@@ -405,6 +405,17 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                       <p>{ticket.company.name}</p>
                       <p className="text-sm text-muted-foreground">{ticket.company.companyAdress}</p>
                       <p className="text-sm text-muted-foreground">{ticket.company.companyZip}</p>
+                      {ticket.company.companyPhone && (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Phone className="h-3 w-3" />
+                          <span>{ticket.company.companyPhone}</span>
+                        </div>
+                      )}
+                      {ticket.company.companyMail && (
+                        <p className="text-sm text-muted-foreground break-all">
+                          {ticket.company.companyMail}
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <div className="flex items-center gap-2">

@@ -10,7 +10,6 @@ import {
   Settings,
   Sun,
   Moon,
-  Bell,
   Play,
   LogOut,
   Book,

@@ -116,6 +116,9 @@ export interface ApiResponse<T = any> {
   check_list?: TodoItem[];
   playerStatus?: PlayerStatus;
   users?: User[];
+  messages?: any[];
+  todayTickets?: any[];
+  wikiData?: any[];
 }
 
 export interface UserStatus {

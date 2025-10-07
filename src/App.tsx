@@ -14,6 +14,7 @@ import { NewTicketForm } from "./components/tickets/NewTicketForm";
 import { Settings } from "./components/settings/Settings";
 import { Reports } from "./components/reports/Reports";
 import { WikiSearch } from "./components/WikiSearch";
+import { TodayView } from "./components/today/TodayView";
 import { TicketWindow } from "./components/tickets/TicketWindow";
 import { UpdateNotification } from "./components/ui/UpdateNotification";
 import { DebugPanel } from "./components/debug/DebugPanel";
@@ -242,7 +243,7 @@ function AppContent() {
       case "settings":
         return <Settings />;
       case "today":
-        return <div><h1 className="text-3xl font-bold">Today's Schedule</h1><p className="text-muted-foreground mt-2">Coming soon...</p></div>;
+        return <TodayView onTicketSelect={handleTicketSelect} />;
       case "wiki":
         return <WikiSearch />;
       case "reports":

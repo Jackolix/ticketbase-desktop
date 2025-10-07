@@ -286,6 +286,18 @@ class ApiClient {
     });
   }
 
+  async ticketTerminierenApi(ticketId: number, userId: number, ticketStart: string, mode: number = 1): Promise<ApiResponse> {
+    return this.request<ApiResponse>('/ticketTerminierenApi', {
+      method: 'POST',
+      body: JSON.stringify({
+        ticket_id: ticketId,
+        user_id: userId,
+        ticket_start: ticketStart,
+        mode,
+      }),
+    });
+  }
+
   // Profile Management
   async editProfile(userId: number, name: string, phone: string): Promise<ApiResponse<{user: User}>> {
     return this.request<ApiResponse<{user: User}>>('/editProfile', {
