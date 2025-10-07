@@ -344,6 +344,18 @@ class ApiClient {
     });
   }
 
+  async correctWatch(data: {
+    ticket_id: number;
+    user_id: number;
+    old_time: number;
+    new_time: number;
+  }): Promise<ApiResponse> {
+    return this.request<ApiResponse>('/correctWatch', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   async downloadAttachment(ticketId: number, filename: string): Promise<Blob> {
     const response = await fetch(`${this.baseUrl}/getDataUrl`, {
       method: 'POST',

@@ -47,6 +47,7 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
   const [isAddingTodo, setIsAddingTodo] = useState(false);
   const [newHistoryText, setNewHistoryText] = useState('');
   const [newHistoryStatus, setNewHistoryStatus] = useState('3'); // Default to "In Progress"
+  const [newHistoryTime, setNewHistoryTime] = useState<string>(''); // Custom time in minutes
   const [isAddingHistory, setIsAddingHistory] = useState(false);
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
   const [previewFile, setPreviewFile] = useState<{ filename: string; ticketId: number } | null>(null);
@@ -123,6 +124,17 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
 
     setIsAddingHistory(true);
     try {
+      // If custom time is provided, set it using correctWatch API first
+      const timeInMinutes = parseInt(newHistoryTime) || 0;
+      if (timeInMinutes > 0) {
+        await apiClient.correctWatch({
+          ticket_id: ticket.id,
+          user_id: user.id,
+          old_time: 0, // No previous time for manual entry
+          new_time: timeInMinutes,
+        });
+      }
+
       const response = await apiClient.saveTicketHistory({
         ticket_id: ticket.id,
         user_id: user.id,
@@ -133,6 +145,7 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
 
       if (response.status === 'success') {
         setNewHistoryText('');
+        setNewHistoryTime('');
         // Refresh ticket history
         await fetchTicketData();
       }
@@ -420,32 +433,47 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                     disabled={isAddingHistory}
                     rows={3}
                   />
-                  <div className="flex gap-2 items-center">
-                    <Select value={newHistoryStatus} onValueChange={setNewHistoryStatus}>
-                      <SelectTrigger className="w-[200px]">
-                        <SelectValue placeholder="Select status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1">New</SelectItem>
-                        <SelectItem value="2">Scheduled</SelectItem>
-                        <SelectItem value="3">In Progress</SelectItem>
-                        <SelectItem value="4">Closed</SelectItem>
-                        <SelectItem value="5">Reopened</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button 
-                      onClick={handleAddHistory} 
-                      disabled={isAddingHistory || !newHistoryText.trim()}
-                      className="ml-auto bg-primary hover:bg-primary/90 text-primary-foreground shadow-md hover:shadow-lg transition-all duration-200"
-                      size="sm"
-                    >
-                      {isAddingHistory ? (
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      ) : (
-                        <Plus className="h-4 w-4 mr-2" />
-                      )}
-                      Add Entry
-                    </Button>
+                  <div className="space-y-2">
+                    <div className="flex gap-2 items-center">
+                      <Select value={newHistoryStatus} onValueChange={setNewHistoryStatus}>
+                        <SelectTrigger className="w-[200px]">
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">Neu</SelectItem>
+                          <SelectItem value="2">Terminiert</SelectItem>
+                          <SelectItem value="3">Prüfen</SelectItem>
+                          <SelectItem value="4">Abgeschlossen</SelectItem>
+                          <SelectItem value="5">Offen</SelectItem>
+                          <SelectItem value="6">Vor Ort</SelectItem>
+                          <SelectItem value="8">Wieder geöffnet</SelectItem>
+                          <SelectItem value="9">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
+                          <SelectItem value="11">Warten auf Rückmeldung (Extern)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        type="number"
+                        min="0"
+                        placeholder="Time (minutes)"
+                        value={newHistoryTime}
+                        onChange={(e) => setNewHistoryTime(e.target.value)}
+                        disabled={isAddingHistory}
+                        className="w-[150px]"
+                      />
+                      <Button
+                        onClick={handleAddHistory}
+                        disabled={isAddingHistory || !newHistoryText.trim()}
+                        className="ml-auto bg-primary hover:bg-primary/90 text-primary-foreground shadow-md hover:shadow-lg transition-all duration-200"
+                        size="sm"
+                      >
+                        {isAddingHistory ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Plus className="h-4 w-4 mr-2" />
+                        )}
+                        Add Entry
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>

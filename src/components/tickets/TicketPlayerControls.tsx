@@ -4,15 +4,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { Ticket } from '@/types/api';
-import { 
-  Play, 
-  Pause, 
-  Square, 
-  RotateCcw, 
+import {
+  Play,
+  Pause,
+  Square,
+  RotateCcw,
   Clock,
   Loader2
 } from 'lucide-react';
@@ -31,6 +32,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [stopMessage, setStopMessage] = useState('');
   const [stopStatus, setStopStatus] = useState('4'); // Default to "Abgeschlossen"
+  const [customTime, setCustomTime] = useState<string>(''); // Custom time in minutes
 
   useEffect(() => {
     fetchPlayerStatus();
@@ -202,10 +204,24 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
 
   const handleStop = async () => {
     if (!user || !stopMessage.trim()) return;
-    
+
     setIsLoading(true);
     try {
-      // Use saveVerlaufApi which stops timer AND saves history
+      // Parse custom time (in minutes)
+      const newTimeInMinutes = parseInt(customTime) || 0;
+      const oldTimeInMinutes = Math.ceil(elapsedTime / 60000);
+
+      // First, set the correction time using correctWatch API
+      if (newTimeInMinutes > 0 && newTimeInMinutes !== oldTimeInMinutes) {
+        await apiClient.correctWatch({
+          ticket_id: ticket.id,
+          user_id: user.id,
+          old_time: oldTimeInMinutes,
+          new_time: newTimeInMinutes,
+        });
+      }
+
+      // Then save the ticket history (which will use the corrected time)
       const response = await apiClient.saveTicketHistory({
         ticket_id: ticket.id,
         user_id: user.id,
@@ -220,6 +236,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         setElapsedTime(0);
         setIsStopDialogOpen(false);
         setStopMessage('');
+        setCustomTime('');
         onStatusChange?.();
       }
     } catch (error) {
@@ -230,6 +247,9 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
   };
 
   const handleStopClick = () => {
+    // Initialize custom time with current elapsed time in minutes
+    const elapsedMinutes = Math.ceil(elapsedTime / 60000);
+    setCustomTime(elapsedMinutes.toString());
     setIsStopDialogOpen(true);
   };
 
@@ -373,16 +393,31 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="4">Abgeschlossen</SelectItem>
-                        <SelectItem value="13">In Bearbeitung</SelectItem>
+                        <SelectItem value="3">Prüfen</SelectItem>
                         <SelectItem value="2">Terminiert</SelectItem>
-                        <SelectItem value="5">Ausstehend</SelectItem>
+                        <SelectItem value="5">Offen</SelectItem>
+                        <SelectItem value="6">Vor Ort</SelectItem>
+                        <SelectItem value="8">Wieder geöffnet</SelectItem>
                         <SelectItem value="9">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
                         <SelectItem value="11">Warten auf Rückmeldung (Extern)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="text-sm text-muted-foreground">
-                    Time worked: <span className="font-mono">{formatTime(elapsedTime)}</span>
+                  <div className="space-y-2">
+                    <label htmlFor="custom-time" className="text-sm font-medium">
+                      Time to Submit (minutes)
+                    </label>
+                    <Input
+                      id="custom-time"
+                      type="number"
+                      min="0"
+                      placeholder="Enter time in minutes"
+                      value={customTime}
+                      onChange={(e) => setCustomTime(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Tracked time: {formatTime(elapsedTime)} ({Math.ceil(elapsedTime / 60000)} minutes)
+                    </p>
                   </div>
                 </div>
                 <DialogFooter>
