@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Search, Book, FileText, Loader2, ExternalLink } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { apiClient } from '@/lib/api';
+import { cache } from '@/lib/cache';
 
 interface WikiArticle {
   id: number;
@@ -22,8 +23,8 @@ interface WikiArticle {
 
 export function WikiSearch() {
   const [articles, setArticles] = useState<WikiArticle[]>([]);
-  const [filteredArticles, setFilteredArticles] = useState<WikiArticle[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [selectedArticle, setSelectedArticle] = useState<WikiArticle | null>(null);
 
@@ -31,23 +32,45 @@ export function WikiSearch() {
     fetchWikiData();
   }, []);
 
+  // Debounced search query update
   useEffect(() => {
-    if (searchQuery.trim() === '') {
-      setFilteredArticles(articles);
-    } else {
-      const query = searchQuery.toLowerCase();
-      const filtered = articles.filter(
-        article =>
-          article.title.toLowerCase().includes(query) ||
-          article.content.toLowerCase().includes(query) ||
-          article.category.toLowerCase().includes(query) ||
-          article.folder.toLowerCase().includes(query)
-      );
-      setFilteredArticles(filtered);
-    }
-  }, [searchQuery, articles]);
+    const handler = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 300);
 
-  const fetchWikiData = async () => {
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [searchQuery]);
+
+  // Memoized filtered articles
+  const filteredArticles = useMemo(() => {
+    if (debouncedQuery.trim() === '') {
+      return articles;
+    }
+    const query = debouncedQuery.toLowerCase();
+    return articles.filter(
+      article =>
+        article.title.toLowerCase().includes(query) ||
+        article.content.toLowerCase().includes(query) ||
+        article.category.toLowerCase().includes(query) ||
+        article.folder.toLowerCase().includes(query)
+    );
+  }, [debouncedQuery, articles]);
+
+  const fetchWikiData = useCallback(async (forceRefresh = false) => {
+    const cacheKey = 'wiki_articles';
+
+    // Try to get from cache first
+    if (!forceRefresh) {
+      const cachedData = cache.get<WikiArticle[]>(cacheKey);
+      if (cachedData) {
+        setArticles(cachedData);
+        setIsLoading(false);
+        return;
+      }
+    }
+
     setIsLoading(true);
     try {
       const response = await apiClient.getWikiData();
@@ -80,17 +103,19 @@ export function WikiSearch() {
           }
         });
 
+        // Cache the response for 10 minutes
+        cache.set(cacheKey, flattenedArticles, 10 * 60 * 1000);
+
         setArticles(flattenedArticles);
-        setFilteredArticles(flattenedArticles);
       }
     } catch (error) {
       console.error('Failed to fetch wiki data:', error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const highlightText = (text: string, query: string) => {
+  const highlightText = useCallback((text: string, query: string) => {
     if (!query) return text;
 
     const parts = text.split(new RegExp(`(${query})`, 'gi'));
@@ -103,15 +128,15 @@ export function WikiSearch() {
         part
       )
     );
-  };
+  }, []);
 
-  const formatDate = (dateString: string) => {
+  const formatDate = useCallback((dateString: string) => {
     return new Date(dateString).toLocaleDateString('de-DE', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
     });
-  };
+  }, []);
 
   return (
     <div className="container mx-auto p-6 space-y-6">
@@ -125,7 +150,7 @@ export function WikiSearch() {
             Search for solutions, documentation, and guides
           </p>
         </div>
-        <Button variant="outline" onClick={fetchWikiData}>
+        <Button variant="outline" onClick={() => fetchWikiData(true)}>
           <Search className="h-4 w-4 mr-2" />
           Refresh
         </Button>

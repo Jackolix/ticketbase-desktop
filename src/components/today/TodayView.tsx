@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
+import { cache } from '@/lib/cache';
 import { Ticket } from '@/types/api';
 import {
   Calendar,
@@ -38,16 +39,50 @@ export function TodayView({ onTicketSelect }: TodayViewProps) {
     }
   }, [user]);
 
-  const fetchTodayData = async () => {
+  const fetchTodayData = useCallback(async (forceRefresh = false) => {
     if (!user) return;
+
+    const today = new Date().toISOString().split('T')[0];
+    const cacheKey = `today_tickets_${user.id}_${today}`;
+
+    // Try to get from cache first
+    if (!forceRefresh) {
+      const cachedData = cache.get<Ticket[]>(cacheKey);
+      if (cachedData) {
+        setTodayTickets(cachedData);
+
+        // Calculate stats from cached tickets
+        let activeTickets = 0;
+        let completedToday = 0;
+
+        cachedData.forEach((ticket: any) => {
+          if (ticket.status_id === 4) {
+            completedToday++;
+          }
+          if (ticket.status_id !== 4 && ticket.my_ticket_id === user.id) {
+            activeTickets++;
+          }
+        });
+
+        setWorkTimeStats({
+          totalMinutes: 0,
+          activeTickets,
+          completedToday,
+        });
+        setIsLoading(false);
+        return;
+      }
+    }
 
     setIsLoading(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
       const response = await apiClient.getTicketsToday(user.id, today);
 
       if (response.status === 'success' && response.todayTickets) {
         setTodayTickets(response.todayTickets);
+
+        // Cache the response for 5 minutes
+        cache.set(cacheKey, response.todayTickets, 5 * 60 * 1000);
 
         // Calculate stats from tickets
         let activeTickets = 0;
@@ -73,20 +108,20 @@ export function TodayView({ onTicketSelect }: TodayViewProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user]);
 
-  const formatDateTime = (dateString: string): string => {
+  const formatDateTime = useCallback((dateString: string): string => {
     const date = new Date(dateString);
     return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  };
+  }, []);
 
-  const getPriorityColor = (priority: string, index: number) => {
+  const getPriorityColor = useCallback((priority: string, index: number) => {
     if (priority === 'High' || index > 7) return 'destructive';
     if (priority === 'Medium' || index > 4) return 'default';
     return 'secondary';
-  };
+  }, []);
 
-  const getStatusBadge = (statusId: number) => {
+  const getStatusBadge = useCallback((statusId: number) => {
     const statusMap: Record<number, { label: string; variant: any }> = {
       1: { label: 'Neu', variant: 'default' },
       2: { label: 'Terminiert', variant: 'secondary' },
@@ -100,7 +135,7 @@ export function TodayView({ onTicketSelect }: TodayViewProps) {
       13: { label: 'In Bearbeitung', variant: 'default' },
     };
     return statusMap[statusId] || { label: 'Unbekannt', variant: 'outline' };
-  };
+  }, []);
 
   if (isLoading) {
     return (
@@ -194,7 +229,7 @@ export function TodayView({ onTicketSelect }: TodayViewProps) {
             <TicketIcon className="h-4 w-4 mr-2" />
             Neues Ticket
           </Button>
-          <Button variant="outline" onClick={fetchTodayData}>
+          <Button variant="outline" onClick={() => fetchTodayData(true)}>
             <Clock className="h-4 w-4 mr-2" />
             Aktualisieren
           </Button>

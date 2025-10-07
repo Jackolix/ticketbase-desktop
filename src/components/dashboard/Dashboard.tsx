@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
+import { cache } from '@/lib/cache';
 import { Ticket } from '@/types/api';
 import {
   Ticket as TicketIcon,
@@ -34,8 +35,34 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
     fetchTickets();
   }, [user]);
 
-  const fetchTickets = async () => {
+  const fetchTickets = useCallback(async (forceRefresh = false) => {
     if (!user) return;
+
+    const cacheKey = `dashboard_tickets_${user.id}`;
+
+    // Try to get from cache first
+    if (!forceRefresh) {
+      const cachedData = cache.get<typeof tickets>(cacheKey);
+      if (cachedData) {
+        setTickets(cachedData);
+
+        // Build activity from cached data
+        const allTickets = [...cachedData.my_tickets, ...cachedData.new_tickets, ...cachedData.all_tickets];
+        const activities = allTickets
+          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          .slice(0, 10)
+          .map(ticket => ({
+            id: ticket.id,
+            type: 'ticket_created',
+            ticket,
+            timestamp: ticket.created_at,
+            description: `Ticket #${ticket.id} created`,
+          }));
+        setRecentActivity(activities);
+        setIsLoading(false);
+        return;
+      }
+    }
 
     try {
       const response = await apiClient.getTickets(
@@ -47,6 +74,9 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
         user.sub_user_group_id
       );
       setTickets(response);
+
+      // Cache the response for 3 minutes
+      cache.set(cacheKey, response, 3 * 60 * 1000);
 
       // Fetch recent activity from all tickets
       const allTickets = [...response.my_tickets, ...response.new_tickets, ...response.all_tickets];
@@ -66,26 +96,33 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user]);
 
-  const totalTickets = tickets.new_tickets.length + tickets.my_tickets.length + tickets.all_tickets.length;
-  const highPriorityTickets = [...tickets.new_tickets, ...tickets.my_tickets, ...tickets.all_tickets]
-    .filter(ticket => ticket.priority === 'High' || ticket.index > 7);
+  const totalTickets = useMemo(
+    () => tickets.new_tickets.length + tickets.my_tickets.length + tickets.all_tickets.length,
+    [tickets]
+  );
 
-  const getPriorityColor = (priority: string, index: number) => {
+  const highPriorityTickets = useMemo(
+    () => [...tickets.new_tickets, ...tickets.my_tickets, ...tickets.all_tickets]
+      .filter(ticket => ticket.priority === 'High' || ticket.index > 7),
+    [tickets]
+  );
+
+  const getPriorityColor = useCallback((priority: string, index: number) => {
     if (priority === 'High' || index > 7) return 'destructive';
     if (priority === 'Medium' || index > 4) return 'default';
     return 'secondary';
-  };
+  }, []);
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = useCallback((status: string) => {
     switch (status.toLowerCase()) {
       case 'new': return 'default';
       case 'in progress': return 'secondary';
       case 'closed': return 'outline';
       default: return 'secondary';
     }
-  };
+  }, []);
 
   if (isLoading) {
     return (
