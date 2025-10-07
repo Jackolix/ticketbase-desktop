@@ -11,6 +11,7 @@ import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
 import { TicketPlayerControls } from './TicketPlayerControls';
+import { TicketMessages } from './TicketMessages';
 import { FilePreviewModal } from '@/components/ui/FilePreviewModal';
 import {
   ArrowLeft,
@@ -330,6 +331,10 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                   </Badge>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="messages">
+                <MessageSquare className="w-4 h-4 mr-2" />
+                Messages
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">
@@ -621,6 +626,10 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                   </Card>
                 )}
               </div>
+            </TabsContent>
+
+            <TabsContent value="messages">
+              <TicketMessages ticketId={ticket.id} />
             </TabsContent>
           </Tabs>
         </div>

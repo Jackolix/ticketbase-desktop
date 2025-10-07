@@ -13,6 +13,7 @@ import {
   Bell,
   Play,
   LogOut,
+  Book,
 } from "lucide-react"
 
 import { NavUser } from "@/components/nav-user"
@@ -66,6 +67,12 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
       url: "today",
       icon: Calendar,
       isActive: currentView === "today",
+    },
+    {
+      title: "Wiki",
+      url: "wiki",
+      icon: Book,
+      isActive: currentView === "wiki",
     },
     {
       title: "Reports",
@@ -193,19 +200,6 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                 </SidebarMenuButton>
               </SidebarMenuItem>
               
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  tooltip="Notifications"
-                  className="h-10 px-3"
-                >
-                  <a href="#" className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
-                    <Bell className="h-4 w-4 shrink-0" />
-                    <span className="font-medium group-data-[collapsible=icon]:sr-only">Notifications</span>
-                    <div className="ml-auto w-2 h-2 bg-destructive rounded-full animate-pulse group-data-[collapsible=icon]:hidden" />
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
 
               <SidebarMenuItem>
                 <SidebarMenuButton

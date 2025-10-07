@@ -438,6 +438,57 @@ class ApiClient {
     });
   }
 
+  // Ticket Messaging
+  async getTicketMessages(ticketId: number): Promise<ApiResponse<{messages: any[]}>> {
+    return this.request<ApiResponse<{messages: any[]}>>(`/getTicketMessages?ticket_id=${ticketId}`, {
+      method: 'GET',
+    });
+  }
+
+  async sendMessage(ticketId: number, userId: number, message: string): Promise<ApiResponse> {
+    return this.request<ApiResponse>('/sendMessage', {
+      method: 'POST',
+      body: JSON.stringify({
+        ticket_id: ticketId,
+        user_id: userId,
+        message,
+      }),
+    });
+  }
+
+  // Wiki / Knowledge Base
+  async getWikiData(): Promise<ApiResponse<{wikiData: any[]}>> {
+    return this.request<ApiResponse<{wikiData: any[]}>>('/getWikiData', {
+      method: 'GET',
+    });
+  }
+
+  // Ticket Rating
+  async getClosedConfirmedTickets(userId: number): Promise<ApiResponse<{tickets: any[]}>> {
+    return this.request<ApiResponse<{tickets: any[]}>>(`/getClosedConfirmedTickets?user_id=${userId}`, {
+      method: 'GET',
+    });
+  }
+
+  async rateTicket(ticketId: number, userId: number, rating: number, feedback?: string): Promise<ApiResponse> {
+    return this.request<ApiResponse>('/rateTicket', {
+      method: 'POST',
+      body: JSON.stringify({
+        ticket_id: ticketId,
+        user_id: userId,
+        rating,
+        feedback,
+      }),
+    });
+  }
+
+  // Time Tracking History
+  async getCorrectWatchHistoriesForPeriod(userId: number, startDate: string, endDate: string): Promise<ApiResponse<{histories: any[]}>> {
+    return this.request<ApiResponse<{histories: any[]}>>(`/getCorrectWatchHistoriesForPeriod?user_id=${userId}&start_date=${startDate}&end_date=${endDate}`, {
+      method: 'GET',
+    });
+  }
+
   // Utility
   isAuthenticated(): boolean {
     return !!this.token;

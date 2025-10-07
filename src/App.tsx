@@ -13,6 +13,7 @@ import { TicketDetail } from "./components/tickets/TicketDetail";
 import { NewTicketForm } from "./components/tickets/NewTicketForm";
 import { Settings } from "./components/settings/Settings";
 import { Reports } from "./components/reports/Reports";
+import { WikiSearch } from "./components/WikiSearch";
 import { TicketWindow } from "./components/tickets/TicketWindow";
 import { UpdateNotification } from "./components/ui/UpdateNotification";
 import { DebugPanel } from "./components/debug/DebugPanel";
@@ -212,13 +213,14 @@ function AppContent() {
 
   const getBreadcrumbTitle = () => {
     if (selectedTicket) return `Ticket #${selectedTicket.id}`;
-    
+
     switch (currentView) {
       case "dashboard": return "Dashboard";
       case "tickets": return "Tickets";
       case "new-ticket": return "New Ticket";
       case "settings": return "Settings";
       case "today": return "Today's Schedule";
+      case "wiki": return "Knowledge Base";
       case "reports": return "Reports";
       default: return "Dashboard";
     }
@@ -241,6 +243,8 @@ function AppContent() {
         return <Settings />;
       case "today":
         return <div><h1 className="text-3xl font-bold">Today's Schedule</h1><p className="text-muted-foreground mt-2">Coming soon...</p></div>;
+      case "wiki":
+        return <WikiSearch />;
       case "reports":
         return <Reports />;
       default:
