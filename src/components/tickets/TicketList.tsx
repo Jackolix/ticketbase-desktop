@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Label } from '@/components/ui/label';
+
 import { useTickets } from '@/contexts/TicketsContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
@@ -31,7 +32,9 @@ import {
   Tickets,
   Filter,
   Wrench,
-  ArrowUpDown
+  ArrowUpDown,
+  LayoutGrid,
+  List
 } from 'lucide-react';
 
 interface TicketListProps {
@@ -52,7 +55,8 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     setCustomers,
     navigationState,
     setActiveTab,
-    setScrollPosition
+    setScrollPosition,
+    setViewMode
   } = useTickets();
   const { user } = useAuth();
   const perf = usePerformanceMonitor('TicketList');
@@ -595,6 +599,163 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     }
   };
 
+  // Helper component for rich tooltip content
+  const TicketTooltipContent = memo(({ ticket }: { ticket: Ticket }) => {
+    const ticketDescription = useMemo(() => getTicketDescription(ticket), [ticket]);
+    const ticketAge = useMemo(() => {
+      const created = parseTicketDate(ticket.created_at);
+      if (!created) return null;
+      const now = new Date();
+      const diffMs = now.getTime() - created.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+      
+      if (diffDays > 0) return `${diffDays} day${diffDays > 1 ? 's' : ''}`;
+      if (diffHours > 0) return `${diffHours} hour${diffHours > 1 ? 's' : ''}`;
+      return `${diffMinutes} minute${diffMinutes > 1 ? 's' : ''}`;
+    }, [ticket]);
+
+    // Parse template_data if available
+    const templateFields = useMemo(() => {
+      if (!ticket.template_data || !ticket.template_data.trim()) return null;
+      try {
+        const data = JSON.parse(ticket.template_data);
+        if (typeof data === 'object' && data !== null) {
+          return Object.entries(data).filter(([_, value]) => value && typeof value === 'string' && value.trim());
+        }
+      } catch {
+        return null;
+      }
+      return null;
+    }, [ticket.template_data]);
+
+    return (
+      <div className="space-y-3 max-w-md">
+        {/* Header Section */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
+              #{ticket.id}
+            </Badge>
+            <Badge variant={getStatusColor(ticket.status)}>
+              {ticket.status}
+            </Badge>
+            {ticket.priority && (
+              <Badge variant="outline" className="text-xs">
+                {ticket.priority}
+              </Badge>
+            )}
+          </div>
+          <h4 className="font-semibold text-sm leading-tight">{ticket.summary}</h4>
+        </div>
+
+        {/* Description Section */}
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Description</div>
+          <p className="text-xs leading-relaxed">{ticketDescription}</p>
+        </div>
+
+        {/* Template Data Fields */}
+        {templateFields && templateFields.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-muted-foreground">Custom Fields</div>
+            <div className="space-y-0.5">
+              {templateFields.slice(0, 5).map(([key, value]) => (
+                <div key={key} className="text-xs">
+                  <span className="font-medium">{key}:</span> {value as string}
+                </div>
+              ))}
+              {templateFields.length > 5 && (
+                <div className="text-xs text-muted-foreground italic">
+                  +{templateFields.length - 5} more fields...
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Customer Details */}
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Customer</div>
+          <div className="space-y-0.5 text-xs">
+            <div className="flex items-center gap-1">
+              <Building className="h-3 w-3" />
+              <span className="font-medium">{ticket.company.name}</span>
+            </div>
+            {ticket.company.number && (
+              <div className="text-muted-foreground">Company #: {ticket.company.number}</div>
+            )}
+            {ticket.company.companyPhone && (
+              <div className="text-muted-foreground">Phone: {ticket.company.companyPhone}</div>
+            )}
+            {ticket.company.companyMail && (
+              <div className="text-muted-foreground">Email: {ticket.company.companyMail}</div>
+            )}
+          </div>
+        </div>
+
+        {/* User Details */}
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Users</div>
+          <div className="space-y-0.5 text-xs">
+            {ticket.ticketUser && (
+              <div className="flex items-center gap-1">
+                <User className="h-3 w-3" />
+                <span>Ticket User: {ticket.ticketUser}</span>
+              </div>
+            )}
+            {ticket.ticketCreator && (
+              <div className="text-muted-foreground">Created by: {ticket.ticketCreator}</div>
+            )}
+            {ticket.ticketTerminatedUser && (
+              <div className="flex items-center gap-1 text-muted-foreground">
+                <Wrench className="h-3 w-3" />
+                <span>Assigned to: {ticket.ticketTerminatedUser}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Quick Stats */}
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Activity</div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              <span>Created: {formatDate(ticket.created_at)}</span>
+            </div>
+            {ticketAge && (
+              <div className="flex items-center gap-1 text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                <span>Age: {ticketAge}</span>
+              </div>
+            )}
+            {ticket.ticketMessagesCount > 0 && (
+              <div className="flex items-center gap-1">
+                <MessageSquare className="h-3 w-3" />
+                <span>{ticket.ticketMessagesCount} message{ticket.ticketMessagesCount > 1 ? 's' : ''}</span>
+              </div>
+            )}
+            {ticket.attachments && ticket.attachments.length > 0 && (
+              <div className="flex items-center gap-1">
+                <Paperclip className="h-3 w-3" />
+                <span>{ticket.attachments.length} attachment{ticket.attachments.length > 1 ? 's' : ''}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Subject/Service Detail */}
+        {ticket.subject && (
+          <div className="space-y-1 pt-2 border-t">
+            <div className="text-xs text-muted-foreground">Service: {ticket.subject}</div>
+          </div>
+        )}
+      </div>
+    );
+  });
+
   // Memoized TicketItem component to prevent unnecessary re-renders
   const TicketItem = memo(({ ticket, onSelect, onOpenInNewWindow, currentUserName }: {
     ticket: Ticket;
@@ -612,11 +773,42 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       [ticket.ticket_start]
     );
 
+    const [showTooltip, setShowTooltip] = useState(false);
+    const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+    const [hoverTimeout, setHoverTimeout] = useState<NodeJS.Timeout | null>(null);
+
+    const handleMouseMove = useCallback((e: React.MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY });
+    }, []);
+
+    const handleMouseEnter = useCallback((e: React.MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY });
+      const timeout = setTimeout(() => {
+        setShowTooltip(true);
+      }, 500);
+      setHoverTimeout(timeout);
+    }, []);
+
+    const handleMouseLeave = useCallback(() => {
+      if (hoverTimeout) {
+        clearTimeout(hoverTimeout);
+        setHoverTimeout(null);
+      }
+      setShowTooltip(false);
+    }, [hoverTimeout]);
+
     return (
-      <Card className={`cursor-pointer hover:bg-accent/50 transition-colors ${
-        isCurrentUserTicket ? 'border-l-4 border-l-blue-500 bg-blue-500/10 dark:bg-blue-400/10' : ''
-      }`} onClick={() => onSelect(ticket)}>
-        <CardContent className="p-3">
+      <>
+        <Card 
+          className={`cursor-pointer hover:bg-accent/50 shadow-sm hover:shadow-lg transition-all duration-200 ${
+            isCurrentUserTicket ? 'border-l-4 border-l-blue-500 bg-blue-500/10 dark:bg-blue-400/10' : ''
+          }`} 
+          onClick={() => onSelect(ticket)}
+          onMouseMove={handleMouseMove}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          <CardContent className="p-3">
         <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-2 flex-wrap">
             <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
@@ -707,6 +899,24 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         </div>
       </CardContent>
     </Card>
+
+    {/* Hover Card Menu */}
+    {showTooltip && (
+      <div
+        className="fixed z-[100] pointer-events-none"
+        style={{
+          left: `${mousePosition.x + 15}px`,
+          top: `${mousePosition.y + 15}px`,
+        }}
+      >
+        <Card className="w-[480px] max-w-[calc(100vw-2rem)] shadow-lg border bg-popover text-popover-foreground">
+          <CardContent className="p-4">
+            <TicketTooltipContent ticket={ticket} />
+          </CardContent>
+        </Card>
+      </div>
+    )}
+    </>
     );
   });
 
@@ -936,6 +1146,24 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                 <SelectItem value="status-desc">Status (Z-A)</SelectItem>
               </SelectContent>
             </Select>
+            <div className="flex items-center border rounded-md">
+              <Button
+                variant={navigationState.viewMode === 'list' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('list')}
+                className="rounded-r-none px-3"
+              >
+                <List className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={navigationState.viewMode === 'grid' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('grid')}
+                className="rounded-l-none px-3"
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -949,7 +1177,11 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               }
             }}
             onScroll={() => handleScroll('my')}
-            className="space-y-4 max-h-[calc(100vh-180px)] overflow-y-auto"
+            className={`max-h-[calc(100vh-180px)] overflow-y-auto ${
+              navigationState.viewMode === 'grid'
+                ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'
+                : 'space-y-4'
+            }`}
             style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
@@ -1002,7 +1234,11 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               }
             }}
             onScroll={() => handleScroll('new')}
-            className="space-y-4 max-h-[calc(100vh-180px)] overflow-y-auto"
+            className={`max-h-[calc(100vh-180px)] overflow-y-auto ${
+              navigationState.viewMode === 'grid'
+                ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'
+                : 'space-y-4'
+            }`}
             style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (
@@ -1055,7 +1291,11 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               }
             }}
             onScroll={() => handleScroll('all')}
-            className="space-y-4 max-h-[calc(100vh-180px)] overflow-y-auto"
+            className={`max-h-[calc(100vh-180px)] overflow-y-auto ${
+              navigationState.viewMode === 'grid'
+                ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'
+                : 'space-y-4'
+            }`}
             style={{ scrollBehavior: 'auto' }}
           >
             {isSearchingTicket && (

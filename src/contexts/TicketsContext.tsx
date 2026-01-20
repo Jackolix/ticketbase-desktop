@@ -64,6 +64,7 @@ interface NavigationState {
     new: number;
     all: number;
   };
+  viewMode: 'list' | 'grid';
 }
 
 interface TicketsContextType {
@@ -92,6 +93,7 @@ interface TicketsContextType {
   updateNavigationState: (updates: Partial<NavigationState>) => void;
   setActiveTab: (tab: string) => void;
   setScrollPosition: (tab: 'my' | 'new' | 'all', position: number) => void;
+  setViewMode: (mode: 'list' | 'grid') => void;
   // Additional ticket data for filtering
   allTicketsForSearch: {
     new_tickets: Ticket[];
@@ -127,7 +129,8 @@ const defaultNavigationState: NavigationState = {
     my: 0,
     new: 0,
     all: 0
-  }
+  },
+  viewMode: 'list'
 };
 
 export function TicketsProvider({ children }: { children: React.ReactNode }) {
@@ -278,6 +281,10 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     });
   }, [navigationState.scrollPositions, updateNavigationState]);
 
+  const setViewMode = useCallback((mode: 'list' | 'grid') => {
+    updateNavigationState({ viewMode: mode });
+  }, [updateNavigationState]);
+
   const loadAllTicketsForSearch = useCallback(async () => {
     if (!user) return { new_tickets: [], my_tickets: [], all_tickets: [] };
 
@@ -387,6 +394,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     updateNavigationState,
     setActiveTab,
     setScrollPosition,
+    setViewMode,
     // Additional data for filtering
     allTicketsForSearch,
     setAllTicketsForSearch,
