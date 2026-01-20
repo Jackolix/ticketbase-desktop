@@ -1005,6 +1005,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
                         onFocus={() => setShowCustomerDropdown(true)}
                         className="pl-10 pr-8"
                         style={{ paddingLeft: '2.75rem' }}
+                        autoComplete="off"
                       />
                       {filterState.customerFilter && (
                         <button
