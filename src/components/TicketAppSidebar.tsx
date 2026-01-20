@@ -140,7 +140,7 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
                     asChild
                     isActive={item.isActive}
                     tooltip={item.title}
-                    className={`h-10 px-3 ${item.variant === 'default' ? 'bg-sidebar-primary text-sidebar-primary-foreground' : ''}`}
+                    className="h-10 px-3"
                   >
                     <a href="#" onClick={(e) => handleNavClick(item.url, e)} className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
                       <item.icon className={`h-4 w-4 shrink-0 ${item.isActive ? 'animate-pulse' : ''}`} />
@@ -226,7 +226,7 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
             <SidebarMenuButton 
               asChild 
               tooltip="Logout"
-              className="h-10 px-3 rounded-lg transition-all duration-200 hover:bg-destructive/10 !text-destructive hover:!text-destructive group-data-[collapsible=icon]:h-8! group-data-[collapsible=icon]:w-8! group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:justify-center"
+              className="h-10 px-3"
             >
               <button
                 onClick={logout}

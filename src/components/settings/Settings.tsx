@@ -179,32 +179,20 @@ export function Settings() {
       )}
 
       <Tabs defaultValue="profile" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4 h-11 bg-muted/50 backdrop-blur-sm">
-          <TabsTrigger 
-            value="profile" 
-            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-          >
+        <TabsList className="grid w-full grid-cols-4">
+          <TabsTrigger value="profile">
             <User className="w-4 h-4 mr-2" />
             Profile
           </TabsTrigger>
-          <TabsTrigger 
-            value="password" 
-            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-          >
+          <TabsTrigger value="password">
             <Lock className="w-4 h-4 mr-2" />
             Password
           </TabsTrigger>
-          <TabsTrigger 
-            value="notifications" 
-            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-          >
+          <TabsTrigger value="notifications">
             <Bell className="w-4 h-4 mr-2" />
             Notifications
           </TabsTrigger>
-          <TabsTrigger 
-            value="about" 
-            className="data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all duration-200 hover:bg-background/50 font-medium"
-          >
+          <TabsTrigger value="about">
             <Info className="w-4 h-4 mr-2" />
             About
           </TabsTrigger>

@@ -206,8 +206,33 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     [customers, filterState.customerSearchTerm]
   );
 
+  // Helper function to parse DD-MM-YYYY format dates
+  const parseTicketDate = (dateString: string): Date | null => {
+    if (!dateString) return null;
+    
+    // Handle DD-MM-YYYY HH:mm format
+    const matchWithTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
+    if (matchWithTime) {
+      const [, day, month, year, hour, minute] = matchWithTime;
+      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(minute));
+      if (!isNaN(date.getTime())) return date;
+    }
+
+    // Handle DD-MM-YYYY format without time
+    const matchWithoutTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (matchWithoutTime) {
+      const [, day, month, year] = matchWithoutTime;
+      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+      if (!isNaN(date.getTime())) return date;
+    }
+
+    // Fallback to standard date parsing
+    const date = new Date(dateString);
+    return isNaN(date.getTime()) ? null : date;
+  };
+
   // Get effective description from ticket (description or template_data)
-  const getTicketDescription = useCallback((ticket: Ticket) => {
+  const getTicketDescription = (ticket: Ticket) => {
     if (ticket.description && ticket.description.trim()) {
       return ticket.description;
     }
@@ -230,7 +255,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     }
 
     return 'No description available';
-  }, []);
+  };
 
   const searchTicketById = async (ticketId: number) => {
     setIsSearchingTicket(true);
@@ -284,7 +309,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     }
   };
 
-  const filterTickets = (ticketList: Ticket[]) => {
+  const filterTickets = useCallback((ticketList: Ticket[]) => {
     return ticketList.filter(ticket => {
       const effectiveDescription = getTicketDescription(ticket);
 
@@ -318,9 +343,17 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
       // Date filter
       const matchesDate = (!filterState.dateFromFilter && !filterState.dateToFilter) || (() => {
-        const ticketDate = new Date(ticket.created_at);
+        const ticketDate = parseTicketDate(ticket.created_at);
+        if (!ticketDate) return true; // If can't parse, don't filter out
+        
         const fromDate = filterState.dateFromFilter ? new Date(filterState.dateFromFilter) : null;
-        const toDate = filterState.dateToFilter ? new Date(filterState.dateToFilter) : null;
+        const toDate = filterState.dateToFilter ? (() => {
+          if (!filterState.dateToFilter) return null;
+          const d = new Date(filterState.dateToFilter);
+          // Set to end of day (23:59:59) for inclusive filtering
+          d.setHours(23, 59, 59, 999);
+          return d;
+        })() : null;
 
         if (fromDate && toDate) {
           return ticketDate >= fromDate && ticketDate <= toDate;
@@ -334,10 +367,10 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
 
       return matchesSearch && matchesStatus && matchesPriority && matchesCustomer && matchesDate;
     });
-  };
+  }, [filterState, customers]);
 
   // Sort tickets based on sortBy value
-  const sortTickets = (ticketList: Ticket[]) => {
+  const sortTickets = useCallback((ticketList: Ticket[]) => {
     const sorted = [...ticketList].sort((a, b) => {
       switch (filterState.sortBy) {
         case 'date-desc':
@@ -365,7 +398,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       }
     });
     return sorted;
-  };
+  }, [filterState.sortBy]);
 
   // Enhanced filter function that includes searched ticket and uses all tickets when needed
   const getFilteredTickets = useCallback((ticketList: Ticket[]) => {
@@ -397,7 +430,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     const result = sortTickets(finalTickets);
     perf.endTimer('getFilteredTickets');
     return result;
-  }, [filterState, allTicketsForSearch, searchedTicket, perf]);
+  }, [filterState, allTicketsForSearch, searchedTicket, perf, filterTickets, sortTickets]);
 
   // Memoized filtered results for each tab to prevent recalculation
   const filteredMyTickets = useMemo(() =>
@@ -583,9 +616,9 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       <Card className={`cursor-pointer hover:bg-accent/50 transition-colors ${
         isCurrentUserTicket ? 'border-l-4 border-l-blue-500 bg-blue-500/10 dark:bg-blue-400/10' : ''
       }`} onClick={() => onSelect(ticket)}>
-        <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2">
+        <CardContent className="p-3">
+        <div className="flex items-start justify-between mb-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
               #{ticket.id}
             </Badge>
@@ -596,6 +629,16 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               <Badge variant="outline">
                 {ticket.priority}
               </Badge>
+            )}
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Calendar className="h-3 w-3" />
+              <span>{formattedDate}</span>
+            </div>
+            {ticket.subject && (
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground">•</span>
+                <span className="text-xs text-muted-foreground truncate max-w-[200px]">{ticket.subject}</span>
+              </div>
             )}
           </div>
           <div className="flex items-center gap-1">
@@ -625,17 +668,18 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={(e) => onOpenInNewWindow(ticket, e)}>
-                  <ExternalLink className="h-4 w-4" />
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Open in new window
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </div>
 
-        <h3 className="font-semibold mb-2 line-clamp-2">{ticket.summary}</h3>
-        <p className="text-sm text-muted-foreground mb-3 line-clamp-2">{ticketDescription}</p>
+        <h3 className="font-semibold mb-1 line-clamp-1 text-sm">{ticket.summary}</h3>
+        <p className="text-xs text-muted-foreground mb-2 line-clamp-1">{ticketDescription}</p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
           <div className="flex items-center gap-1 text-muted-foreground">
             <Building className="h-3 w-3" />
             <span className="truncate">{ticket.company.name}</span>
@@ -654,10 +698,6 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
               </span>
             </div>
           )}
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Calendar className="h-3 w-3" />
-            <span>{formattedDate}</span>
-          </div>
           {formattedStartDate && (
             <div className="flex items-center gap-1 text-muted-foreground">
               <Clock className="h-3 w-3" />
@@ -665,13 +705,6 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             </div>
           )}
         </div>
-
-        {ticket.subject && (
-          <div className="mt-2 pt-2 border-t">
-            <span className="text-xs font-medium text-muted-foreground">Subject: </span>
-            <span className="text-xs">{ticket.subject}</span>
-          </div>
-        )}
       </CardContent>
     </Card>
     );
@@ -832,8 +865,8 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       </div>
 
       {/* Ticket Tabs */}
-      <Tabs value={navigationState.activeTab} onValueChange={handleTabChange} className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
+      <Tabs value={navigationState.activeTab} onValueChange={handleTabChange}>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <TabsList>
             <TabsTrigger value="my">
               <User className="w-4 h-4 mr-2" />
@@ -873,21 +906,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
             </TabsTrigger>
           </TabsList>
 
-          <div className="flex items-center gap-2">
-            <Select value={filterState.statusFilter} onValueChange={(value) => updateFilterState({ statusFilter: value })}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Statuses</SelectItem>
-                <SelectItem value="neu">Neu</SelectItem>
-                <SelectItem value="ausstehend">Ausstehend</SelectItem>
-                <SelectItem value="warten auf rückmeldung vom ticketbenutzer">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
-                <SelectItem value="warten auf rückmeldung (extern)">Warten auf Rückmeldung (Extern)</SelectItem>
-                <SelectItem value="terminiert">Terminiert</SelectItem>
-                <SelectItem value="abgeschlossen">Abgeschlossen</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
             <Select value={filterState.priorityFilter} onValueChange={(value) => updateFilterState({ priorityFilter: value })}>
               <SelectTrigger className="w-[120px]">
                 <SelectValue placeholder="Priority" />
@@ -920,7 +939,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           </div>
         </div>
 
-        <TabsContent value="my" className="space-y-4">
+        <TabsContent value="my">
           <div
             ref={(el) => {
               scrollContainerRefs.current.my = el;
@@ -973,7 +992,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="new" className="space-y-4">
+        <TabsContent value="new">
           <div
             ref={(el) => {
               scrollContainerRefs.current.new = el;
@@ -1026,7 +1045,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="all" className="space-y-4">
+        <TabsContent value="all">
           <div
             ref={(el) => {
               scrollContainerRefs.current.all = el;
