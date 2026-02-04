@@ -4,11 +4,12 @@ import { Button } from './button';
 import { Progress } from './progress';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './card';
 import { Badge } from './badge';
-import { Download, RefreshCw, X } from 'lucide-react';
+import { Check, Download, RefreshCw, X } from 'lucide-react';
 
 export const UpdateNotification: React.FC = () => {
   const {
     availableUpdate,
+    isDownloading,
     isUpdateDownloaded,
     isInstalling,
     downloadProgress,
@@ -38,7 +39,9 @@ export const UpdateNotification: React.FC = () => {
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <div className="flex items-center gap-2">
           <RefreshCw className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-          <CardTitle className="text-sm">Update Available</CardTitle>
+          <CardTitle className="text-sm">
+            {isUpdateDownloaded ? 'Update Ready' : 'Update Available'}
+          </CardTitle>
         </div>
         <Button
           variant="ghost"
@@ -49,20 +52,20 @@ export const UpdateNotification: React.FC = () => {
           <X className="h-3 w-3" />
         </Button>
       </CardHeader>
-      
+
       <CardContent className="pb-3">
         <CardDescription className="mb-3">
           Version <Badge variant="secondary">{availableUpdate.version}</Badge> is now available.
           You're currently on version <Badge variant="outline">{availableUpdate.currentVersion}</Badge>.
         </CardDescription>
-        
+
         {availableUpdate.body && (
           <div className="text-xs text-muted-foreground mb-3 max-h-20 overflow-y-auto">
             {availableUpdate.body}
           </div>
         )}
 
-        {downloadProgress > 0 && downloadProgress < 100 && (
+        {isDownloading && (
           <div className="mb-3">
             <div className="flex justify-between text-xs mb-1">
               <span>Downloading...</span>
@@ -71,17 +74,24 @@ export const UpdateNotification: React.FC = () => {
             <Progress value={downloadProgress} className="h-2" />
           </div>
         )}
+
+        {isUpdateDownloaded && !isInstalling && (
+          <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 mb-2">
+            <Check className="h-3 w-3" />
+            <span>Update will install when you close the app</span>
+          </div>
+        )}
       </CardContent>
 
       <CardFooter className="pt-0">
-        {!isUpdateDownloaded && downloadProgress === 0 && (
+        {!isUpdateDownloaded && !isDownloading && (
           <Button onClick={handleDownload} className="w-full" size="sm">
             <Download className="h-3 w-3 mr-1" />
             Download Update
           </Button>
         )}
-        
-        {downloadProgress > 0 && downloadProgress < 100 && (
+
+        {isDownloading && (
           <Button disabled className="w-full" size="sm">
             <Download className="h-3 w-3 mr-1 animate-spin" />
             Downloading...
@@ -89,9 +99,9 @@ export const UpdateNotification: React.FC = () => {
         )}
 
         {isUpdateDownloaded && !isInstalling && (
-          <Button onClick={handleInstall} className="w-full" size="sm">
+          <Button onClick={handleInstall} className="w-full" size="sm" variant="outline">
             <RefreshCw className="h-3 w-3 mr-1" />
-            Install & Restart
+            Install & Restart Now
           </Button>
         )}
 

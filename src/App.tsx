@@ -209,7 +209,12 @@ function AppContent() {
   }
 
   if (!isAuthenticated) {
-    return <CustomLoginForm />;
+    return (
+      <>
+        <CustomLoginForm />
+        <UpdateNotification />
+      </>
+    );
   }
 
   const getBreadcrumbTitle = () => {

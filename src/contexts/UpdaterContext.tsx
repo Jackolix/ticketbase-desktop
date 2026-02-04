@@ -1,12 +1,14 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { check, Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 interface UpdaterContextType {
   currentVersion: string;
   availableUpdate: Update | null;
   isCheckingForUpdate: boolean;
+  isDownloading: boolean;
   isUpdateDownloaded: boolean;
   isInstalling: boolean;
   downloadProgress: number;
@@ -39,11 +41,25 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
   const [isUpdateDownloaded, setIsUpdateDownloaded] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastCheckTime, setLastCheckTime] = useState<Date | null>(null);
   const [debugInfo, setDebugInfo] = useState('');
+
+  // Refs to access latest state in event handlers
+  const updateRef = useRef<Update | null>(null);
+  const isUpdateDownloadedRef = useRef(false);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    updateRef.current = availableUpdate;
+  }, [availableUpdate]);
+
+  useEffect(() => {
+    isUpdateDownloadedRef.current = isUpdateDownloaded;
+  }, [isUpdateDownloaded]);
 
   // Get current app version on mount
   useEffect(() => {
@@ -60,6 +76,47 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
     getCurrentVersion();
   }, []);
 
+  // Auto-download update in background
+  const autoDownloadUpdate = async (update: Update) => {
+    if (isDownloading || isUpdateDownloaded) return;
+
+    try {
+      console.log('Auto-downloading update in background...');
+      setIsDownloading(true);
+      setDownloadProgress(0);
+
+      let totalBytes = 0;
+      let downloadedBytes = 0;
+
+      await update.download((event: DownloadEvent) => {
+        switch (event.event) {
+          case 'Started':
+            if (event.data.contentLength) {
+              totalBytes = event.data.contentLength;
+            }
+            break;
+          case 'Progress':
+            downloadedBytes += event.data.chunkLength;
+            if (totalBytes > 0) {
+              const progress = Math.round((downloadedBytes / totalBytes) * 100);
+              setDownloadProgress(progress);
+            }
+            break;
+          case 'Finished':
+            setDownloadProgress(100);
+            setIsUpdateDownloaded(true);
+            console.log('Update downloaded successfully (background). Will install on app close.');
+            break;
+        }
+      });
+    } catch (error) {
+      console.error('Failed to auto-download update:', error);
+      setDownloadProgress(0);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   // Check for updates periodically (every 30 minutes)
   useEffect(() => {
     const checkForUpdates = async () => {
@@ -69,16 +126,19 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
         setIsCheckingForUpdate(true);
         setLastError(null);
         const update = await check();
-        
+
         if (update && (!availableUpdate || update.version !== availableUpdate.version)) {
           console.log('Update available:', update.version);
           setAvailableUpdate(update);
           setIsUpdateDownloaded(false);
+
+          // Auto-download the update in background
+          autoDownloadUpdate(update);
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
         console.error('Update check failed:', errorMessage);
-        
+
         // Don't show error for development or missing latest.json
         if (errorMessage.includes('Could not fetch a valid release JSON')) {
           console.log('Note: latest.json not found. This is normal if no releases with updater support have been published yet.');
@@ -101,6 +161,45 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
       return () => clearInterval(interval);
     }
   }, []); // Remove dependencies to prevent infinite loops
+
+  // Install update on window close
+  useEffect(() => {
+    const isDevelopment = import.meta.env.DEV;
+    if (isDevelopment) return;
+
+    let unlisten: (() => void) | undefined;
+
+    const setupCloseHandler = async () => {
+      const appWindow = getCurrentWindow();
+
+      unlisten = await appWindow.onCloseRequested(async (event) => {
+        if (isUpdateDownloadedRef.current && updateRef.current) {
+          // Prevent the window from closing immediately
+          event.preventDefault();
+
+          console.log('Installing update before closing...');
+
+          try {
+            await updateRef.current.install();
+            // Relaunch with the new version
+            await relaunch();
+          } catch (error) {
+            console.error('Failed to install update on close:', error);
+            // If install fails, just close the app normally
+            await appWindow.destroy();
+          }
+        }
+      });
+    };
+
+    setupCloseHandler();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
 
   const checkForUpdate = async () => {
     // Prevent multiple simultaneous checks but don't silently fail
@@ -189,15 +288,16 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   };
 
   const downloadUpdate = async () => {
-    if (!availableUpdate || isUpdateDownloaded) return;
+    if (!availableUpdate || isUpdateDownloaded || isDownloading) return;
 
     try {
       console.log('Downloading update...');
+      setIsDownloading(true);
       setDownloadProgress(0);
-      
+
       let totalBytes = 0;
       let downloadedBytes = 0;
-      
+
       await availableUpdate.download((event: DownloadEvent) => {
         switch (event.event) {
           case 'Started':
@@ -222,6 +322,8 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
     } catch (error) {
       console.error('Failed to download update:', error);
       setDownloadProgress(0);
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -250,6 +352,7 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
     currentVersion,
     availableUpdate,
     isCheckingForUpdate,
+    isDownloading,
     isUpdateDownloaded,
     isInstalling,
     downloadProgress,
