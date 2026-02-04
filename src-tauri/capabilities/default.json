@@ -2,11 +2,36 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "ticket-*"],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
     "opener:default",
     "notification:default",
-    "notification:allow-request-permission"
+    "notification:allow-request-permission",
+    "fs:allow-write-file",
+    "fs:allow-read-file",
+    "fs:allow-create",
+    "fs:allow-exists",
+    "fs:allow-remove",
+    "fs:scope-temp",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://itm.ticketbase.net/**" }]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$TEMP/**" }]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "file://**" }]
+    },
+    {
+      "identifier": "opener:allow-reveal-item-in-dir",
+      "allow": [{ "path": "$TEMP/**" }]
+    }
   ]
 }

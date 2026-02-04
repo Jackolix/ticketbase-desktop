@@ -6,11 +6,11 @@
     "linux"
   ],
   "windows": [
-    "main"
+    "main",
+    "ticket-*"
   ],
   "permissions": [
     "updater:default",
-    "notification:default",
-    "notification:allow-request-permission"
+    "updater:allow-check"
   ]
 }

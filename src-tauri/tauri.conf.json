@@ -20,61 +20,7 @@
       }
     ],
     "security": {
-      "csp": null,
-      "capabilities": [
-        {
-          "identifier": "main-capability",
-          "description": "Capability for the main window",
-          "windows": [
-            "main"
-          ],
-          "permissions": [
-            "core:default",
-            "core:webview:allow-create-webview-window",
-            "core:window:allow-set-focus",
-            "core:window:allow-close",
-            "notification:default",
-            "notification:allow-request-permission",
-            "updater:default",
-            "updater:allow-check",
-            "fs:allow-write-file",
-            "fs:allow-read-file",
-            "fs:allow-create",
-            "fs:allow-exists",
-            "fs:allow-remove",
-            "fs:scope-temp",
-            {
-              "identifier": "opener:allow-open-path",
-              "allow": [
-                {
-                  "path": "$TEMP/*"
-                }
-              ]
-            },
-            {
-              "identifier": "opener:allow-open-url",
-              "allow": [
-                {
-                  "url": "file://*"
-                }
-              ]
-            },
-            {
-              "identifier": "opener:allow-reveal-item-in-dir",
-              "allow": [
-                {
-                  "path": "$TEMP/*"
-                }
-              ]
-            }
-          ],
-          "platforms": [
-            "linux",
-            "macOS",
-            "windows"
-          ]
-        }
-      ]
+      "csp": null
     }
   },
   "plugins": {
