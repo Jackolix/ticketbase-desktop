@@ -16,18 +16,22 @@ import {
   MapPin, 
   AlertCircle,
   CheckCircle,
-  Loader2
+  Loader2,
+  Upload,
+  X,
+  Image as ImageIcon
 } from 'lucide-react';
 
 export function NewTicketForm() {
   const { user } = useAuth();
   const [formData, setFormData] = useState({
     description: '',
-    priority: 'Medium',
+    priority: 'HIGH',
     company_id: '',
     location_id: '',
     for_user_id: '',
-    template_id: ''
+    template_id: '',
+    attachments: [] as File[]
   });
   
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -39,6 +43,7 @@ export function NewTicketForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [showCompanyDropdown, setShowCompanyDropdown] = useState(false);
   const [companySearchTerm, setCompanySearchTerm] = useState('');
 
@@ -97,7 +102,11 @@ export function NewTicketForm() {
       }
     } catch (error) {
       console.error('Failed to fetch initial data:', error);
-      setError('Failed to load form data');
+      if (error instanceof Error) {
+        setError(`Failed to load form data: ${error.message}. Please refresh the page.`);
+      } else {
+        setError('Failed to load form data. Please refresh the page.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -143,6 +152,24 @@ export function NewTicketForm() {
     }));
     setError('');
     setSuccess(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const newFiles = Array.from(files);
+      setFormData(prev => ({
+        ...prev,
+        attachments: [...prev.attachments, ...newFiles]
+      }));
+    }
+  };
+
+  const removeAttachment = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      attachments: prev.attachments.filter((_, i) => i !== index)
+    }));
   };
 
   const handleCompanySelect = (company: Company) => {
@@ -191,6 +218,16 @@ export function NewTicketForm() {
       return;
     }
 
+    if (formData.description.trim().length < 3) {
+      setError('Description must be at least 3 characters long');
+      return;
+    }
+
+    if (formData.description.trim().length > 1000) {
+      setError('Description must be less than 1000 characters');
+      return;
+    }
+
     if (!formData.company_id) {
       setError('Please select a company');
       return;
@@ -200,38 +237,87 @@ export function NewTicketForm() {
     setError('');
 
     try {
+      // Ensure all IDs are properly converted to numbers
+      const locationId = formData.location_id 
+        ? parseInt(formData.location_id) 
+        : (typeof user.location_id === 'number' ? user.location_id : parseInt(String(user.location_id)));
+      
+      const forUserId = formData.for_user_id 
+        ? parseInt(formData.for_user_id) 
+        : user.id;
+
       const ticketData = {
         user_id: user.id,
         description: formData.description,
         priority: formData.priority,
         company_id: parseInt(formData.company_id),
-        location_id: formData.location_id ? parseInt(formData.location_id) : undefined,
-        for_user_id: formData.for_user_id ? parseInt(formData.for_user_id) : undefined,
+        location_id: locationId,
+        for_user_id: forUserId,
         dyn_template_id: formData.template_id ? parseInt(formData.template_id) : undefined,
+        attachments: formData.attachments.length > 0 ? formData.attachments : undefined,
       };
+
+      console.log('Submitting ticket data:', {
+        ...ticketData,
+        attachments: ticketData.attachments ? `${ticketData.attachments.length} file(s)` : 'none'
+      });
 
       const response = await apiClient.createTicket(ticketData);
       
       if (response.status === 'success') {
         setSuccess(true);
+        const companyName = companies.find(c => c.id.toString() === formData.company_id)?.name || 'the company';
+        const priorityLabel = formData.priority === 'VERY_HIGH' ? 'High (8 hours)' : 
+                              formData.priority === 'HIGH' ? 'Medium (2 days)' : 'Low (4 days)';
+        const attachmentInfo = formData.attachments.length > 0 
+          ? ` with ${formData.attachments.length} attachment${formData.attachments.length > 1 ? 's' : ''}`
+          : '';
+        
+        setSuccessMessage(
+          `Ticket created successfully for ${companyName} with ${priorityLabel} priority${attachmentInfo}. ` +
+          `It will be assigned to a technician soon.`
+        );
+        
         // Reset form
         setFormData({
           description: '',
-          priority: 'Medium',
+          priority: 'HIGH',
           company_id: '',
           location_id: '',
           for_user_id: '',
-          template_id: ''
+          template_id: '',
+          attachments: []
         });
         setCompanySearchTerm('');
         setLocations([]);
         setUsers([]);
+        
+        // Auto-hide success message after 10 seconds
+        setTimeout(() => {
+          setSuccess(false);
+          setSuccessMessage('');
+        }, 10000);
       } else {
         setError(response.message || 'Failed to create ticket');
       }
     } catch (error) {
       console.error('Failed to create ticket:', error);
-      setError('Failed to create ticket. Please try again.');
+      
+      if (error instanceof Error) {
+        if (error.message.includes('401') || error.message.includes('403')) {
+          setError('Authentication error. Please log in again.');
+        } else if (error.message.includes('400')) {
+          setError('Invalid ticket data. Please check all fields and try again.');
+        } else if (error.message.includes('500')) {
+          setError('Server error. Please try again later or contact support.');
+        } else if (error.message.includes('network') || error.message.includes('Failed to fetch')) {
+          setError('Network error. Please check your internet connection and try again.');
+        } else {
+          setError(`Failed to create ticket: ${error.message}`);
+        }
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -289,17 +375,22 @@ export function NewTicketForm() {
             )}
 
             {success && (
-              <Alert>
-                <CheckCircle className="h-4 w-4" />
+              <Alert className="border-green-200 bg-green-50 text-green-900">
+                <CheckCircle className="h-4 w-4 text-green-600" />
                 <AlertDescription>
-                  Ticket created successfully! It will be assigned to a technician soon.
+                  {successMessage}
                 </AlertDescription>
               </Alert>
             )}
 
             {/* Description */}
             <div className="space-y-2">
-              <Label htmlFor="description">Description *</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="description">Description *</Label>
+                <span className="text-xs text-muted-foreground">
+                  {formData.description.length} / 1000 characters
+                </span>
+              </div>
               <Textarea
                 id="description"
                 placeholder="Describe the issue or request in detail..."
@@ -307,7 +398,11 @@ export function NewTicketForm() {
                 onChange={(e) => handleInputChange('description', e.target.value)}
                 className="min-h-[100px]"
                 disabled={isSubmitting}
+                maxLength={1000}
               />
+              {formData.description.length > 0 && formData.description.length < 3 && (
+                <p className="text-xs text-destructive">Minimum 3 characters required</p>
+              )}
             </div>
 
             {/* Priority */}
@@ -322,9 +417,9 @@ export function NewTicketForm() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Low">Low</SelectItem>
-                  <SelectItem value="Medium">Medium</SelectItem>
-                  <SelectItem value="High">High</SelectItem>
+                  <SelectItem value="NORMAL">Low (4 days)</SelectItem>
+                  <SelectItem value="HIGH">Medium (2 days)</SelectItem>
+                  <SelectItem value="VERY_HIGH">High (8 hours)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -460,6 +555,49 @@ export function NewTicketForm() {
               </div>
             )}
 
+            {/* File Upload */}
+            <div className="space-y-2">
+              <Label htmlFor="attachments" className="flex items-center gap-2">
+                <Upload className="h-4 w-4" />
+                Attachments
+              </Label>
+              <div className="space-y-2">
+                <Input
+                  id="attachments"
+                  type="file"
+                  onChange={handleFileChange}
+                  accept="image/*"
+                  multiple
+                  disabled={isSubmitting}
+                  className="cursor-pointer"
+                />
+                {formData.attachments.length > 0 && (
+                  <div className="space-y-2">
+                    {formData.attachments.map((file, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-2 p-2 border rounded-md bg-muted/50"
+                      >
+                        <ImageIcon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <span className="text-sm flex-1 truncate">{file.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {(file.size / 1024).toFixed(1)} KB
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeAttachment(index)}
+                          className="text-muted-foreground hover:text-destructive transition-colors"
+                          disabled={isSubmitting}
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Submit Button */}
             <div className="flex justify-end gap-4">
               <Button
@@ -468,11 +606,12 @@ export function NewTicketForm() {
                 onClick={() => {
                   setFormData({
                     description: '',
-                    priority: 'Medium',
+                    priority: 'HIGH',
                     company_id: '',
                     location_id: '',
                     for_user_id: '',
-                    template_id: ''
+                    template_id: '',
+                    attachments: []
                   });
                   setCompanySearchTerm('');
                   setLocations([]);
