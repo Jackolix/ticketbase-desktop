@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
+import { sendNotification, isPermissionGranted, requestPermission, onAction, registerActionTypes } from '@tauri-apps/plugin-notification';
+import { invoke } from '@tauri-apps/api/core';
 import { useAuth } from './AuthContext';
 import { useTickets } from './TicketsContext';
 import { Ticket } from '@/types/api';
@@ -16,7 +17,7 @@ interface NotificationSettings {
 interface NotificationContextType {
   settings: NotificationSettings;
   updateSettings: (settings: Partial<NotificationSettings>) => void;
-  showNotification: (title: string, message: string, options?: NotificationOptions) => void;
+  showNotification: (title: string, message: string, ticketId?: number) => void;
   playSound: () => void;
   requestNotificationPermission: () => Promise<boolean>;
 }
@@ -79,9 +80,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     });
   }, [settings.soundVolume]);
 
-  // Request Tauri notification permission on mount
+  // Request Tauri notification permission and set up action handlers on mount
   useEffect(() => {
-    const checkPermission = async () => {
+    let unlistenAction: (() => void) | undefined;
+
+    const setup = async () => {
       try {
         const permissionGranted = await isPermissionGranted();
         if (!permissionGranted) {
@@ -90,9 +93,35 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       } catch (error) {
         console.warn('Could not request notification permission:', error);
       }
+
+      try {
+        // Register action type so clicking the notification can open the ticket
+        await registerActionTypes([{
+          id: 'ticket-notification',
+          actions: [{
+            id: 'open',
+            title: 'Open Ticket',
+            foreground: true,
+          }],
+        }]);
+
+        // Listen for notification clicks — open the related ticket window
+        unlistenAction = await onAction((action: any) => {
+          const ticketId = action.notification?.extra?.ticketId;
+          if (ticketId) {
+            invoke('open_ticket_window', { ticketId: parseInt(ticketId) }).catch(console.error);
+          }
+        });
+      } catch (error) {
+        console.warn('Could not set up notification action handlers:', error);
+      }
     };
-    
-    checkPermission();
+
+    setup();
+
+    return () => {
+      if (unlistenAction) unlistenAction();
+    };
   }, []);
 
   const updateSettings = (newSettings: Partial<NotificationSettings>) => {
@@ -106,7 +135,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }
   };
 
-  const showNotification = async (title: string, message: string, options?: NotificationOptions) => {
+  const showNotification = async (title: string, message: string, ticketId?: number) => {
     // Try to use Tauri native notifications first
     try {
       const permissionGranted = await isPermissionGranted();
@@ -114,19 +143,23 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         await sendNotification({
           title,
           body: message,
-          icon: 'icon.png', // Tauri uses relative path from public folder
+          icon: 'icon.png',
+          // When a ticketId is provided, attach the action type and extra data
+          // so clicking the notification opens that ticket
+          ...(ticketId ? {
+            actionTypeId: 'ticket-notification',
+            extra: { ticketId: String(ticketId) },
+          } : {}),
         });
       }
     } catch (error) {
       console.warn('Could not send Tauri notification, falling back to browser notification:', error);
-      
+
       // Fallback to browser notification
       if ('Notification' in window && Notification.permission === 'granted') {
         const notification = new Notification(title, {
           body: message,
           icon: '/icon.png',
-          badge: '/icon.png',
-          ...options,
         });
 
         // Auto close after 5 seconds
@@ -164,15 +197,29 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       );
 
       if (newTicketsAdded.length > 0) {
-        const title = newTicketsAdded.length === 1 
-          ? 'New Ticket Available' 
+        const title = newTicketsAdded.length === 1
+          ? 'New Ticket Available'
           : `${newTicketsAdded.length} New Tickets Available`;
-        
-        const message = newTicketsAdded.length === 1
-          ? `${newTicketsAdded[0].subject} - ${newTicketsAdded[0].summary}`
-          : `${newTicketsAdded.length} new tickets are now available in your pool`;
 
-        showNotification(title, message);
+        let message: string;
+        let ticketId: number | undefined;
+
+        if (newTicketsAdded.length === 1) {
+          const t = newTicketsAdded[0];
+          const parts = [
+            `#${t.id}`,
+            t.subject && `[${t.subject}]`,
+            t.priority && `Priority: ${t.priority}`,
+            t.company?.name && `Customer: ${t.company.name}`,
+            t.summary,
+          ].filter(Boolean);
+          message = parts.join(' · ');
+          ticketId = t.id;
+        } else {
+          message = `${newTicketsAdded.length} new tickets are now available in your pool`;
+        }
+
+        showNotification(title, message, ticketId);
         playSound();
       }
     }
@@ -185,15 +232,29 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       );
 
       if (newAssignments.length > 0) {
-        const title = newAssignments.length === 1 
-          ? 'New Ticket Assigned' 
+        const title = newAssignments.length === 1
+          ? 'New Ticket Assigned'
           : `${newAssignments.length} New Tickets Assigned`;
-        
-        const message = newAssignments.length === 1
-          ? `${newAssignments[0].subject} has been assigned to you`
-          : `${newAssignments.length} tickets have been assigned to you`;
 
-        showNotification(title, message);
+        let message: string;
+        let ticketId: number | undefined;
+
+        if (newAssignments.length === 1) {
+          const t = newAssignments[0];
+          const parts = [
+            `#${t.id}`,
+            t.subject && `[${t.subject}]`,
+            t.priority && `Priority: ${t.priority}`,
+            t.company?.name && `Customer: ${t.company.name}`,
+            'has been assigned to you',
+          ].filter(Boolean);
+          message = parts.join(' · ');
+          ticketId = t.id;
+        } else {
+          message = `${newAssignments.length} tickets have been assigned to you`;
+        }
+
+        showNotification(title, message, ticketId);
         playSound();
       }
     }

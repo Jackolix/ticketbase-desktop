@@ -180,13 +180,23 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
           console.log('Installing update before closing...');
 
           try {
-            await updateRef.current.install();
+            // Timeout after 15 seconds to prevent hanging on close
+            await Promise.race([
+              updateRef.current.install(),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Install timeout after 15s')), 15000)
+              ),
+            ]);
             // Relaunch with the new version
             await relaunch();
           } catch (error) {
             console.error('Failed to install update on close:', error);
-            // If install fails, just close the app normally
-            await appWindow.destroy();
+            // If install fails or times out, force-close the window
+            try {
+              await appWindow.destroy();
+            } catch {
+              window.close();
+            }
           }
         }
       });
