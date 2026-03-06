@@ -82,7 +82,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   // Request Tauri notification permission and set up action handlers on mount
   useEffect(() => {
-    let unlistenAction: (() => void) | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let unlistenAction: any;
 
     const setup = async () => {
       try {
@@ -120,7 +121,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     setup();
 
     return () => {
-      if (unlistenAction) unlistenAction();
+      if (unlistenAction) unlistenAction.unregister();
     };
   }, []);
 
