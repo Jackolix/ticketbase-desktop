@@ -20,6 +20,7 @@ import {
   Paperclip,
   Phone,
   Plus,
+  Receipt,
   User,
   UserPlus,
   X,
@@ -44,6 +45,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { syncRefresh } from '@/lib/sync';
 import { parseTicketDate } from '@/lib/ticketDate';
+import { normalizeTicketText, splitQuotedReply } from '@/lib/richText';
 import { parseTemplateData } from '@/lib/templateData';
 import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
 import { TONE_BADGE, priorityLabel, priorityTone, statusTone } from '@/lib/ticketStatus';
@@ -369,7 +371,9 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
             </div>
             <CardContent className="space-y-4 p-3">
               {hasDescription && (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">{ticket.description}</p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                  {normalizeTicketText(ticket.description)}
+                </p>
               )}
 
               {templateFields.length > 0 && (
@@ -575,16 +579,36 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
                           </div>
 
                           {entry.technician_reply && (
-                            <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                              {toPlainText(entry.technician_reply)}
-                            </p>
+                            <HistoryText raw={entry.technician_reply} />
                           )}
 
-                          {entry.total_time > 0 && (
-                            <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                              <Clock className="h-3 w-3" />
-                              {Math.floor(entry.total_time / 60)} Min.
-                            </p>
+                          {/* Two different numbers, and technicians care about
+                              both: what was measured, and what the customer is
+                              billed after rounding up to the billing block.
+                              The old code divided the billed minutes by 60 and
+                              labelled the result "minutes", so anything under
+                              an hour displayed as 0. */}
+                          {(entry.total_time > 0 || (entry.raw_time ?? 0) > 0) && (
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                              {entry.total_time > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Receipt className="h-3 w-3" />
+                                  <span className="tabular-nums">
+                                    {formatMinutes(entry.total_time)}
+                                  </span>
+                                  <span className="opacity-70">berechnet</span>
+                                </span>
+                              )}
+                              {(entry.raw_time ?? 0) > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="h-3 w-3" />
+                                  <span className="tabular-nums">
+                                    {formatMinutes(Math.round((entry.raw_time ?? 0) / 60))}
+                                  </span>
+                                  <span className="opacity-70">erfasst</span>
+                                </span>
+                              )}
+                            </div>
                           )}
                         </CardContent>
                       </Card>
@@ -756,6 +780,16 @@ function Meta({
   );
 }
 
+/** Minutes as `1:45 h` past the hour, plain minutes below it. */
+function formatMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0 Min.';
+  if (minutes < 60) return `${minutes} Min.`;
+
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours}:${rest.toString().padStart(2, '0')} h`;
+}
+
 function formatDate(value: string): string {
   if (!value) return '—';
   const parsed = parseTicketDate(value);
@@ -769,12 +803,36 @@ function formatDate(value: string): string {
 }
 
 /**
- * History entries are HTML from the web editor. Rendering them as text keeps
- * untrusted markup out of the app; the trade-off is losing formatting, which is
- * preferable to injecting it.
+ * A history entry's text, with any quoted email thread collapsed.
+ *
+ * Entries are often pasted mail. The backend strips the tags but leaves the
+ * whitespace, so the text arrives with three or four blank lines between every
+ * paragraph; normalizeTicketText collapses those.
  */
-function toPlainText(html: string): string {
-  const el = document.createElement('div');
-  el.innerHTML = html;
-  return (el.textContent || el.innerText || '').trim();
+function HistoryText({ raw }: { raw: string }) {
+  const [showQuoted, setShowQuoted] = useState(false);
+  const { body, quoted } = splitQuotedReply(normalizeTicketText(raw));
+
+  return (
+    <div className="space-y-1.5">
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{body}</p>
+
+      {quoted && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowQuoted((open) => !open)}
+            className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {showQuoted ? 'Zitierten Verlauf ausblenden' : 'Zitierten Verlauf anzeigen'}
+          </button>
+          {showQuoted && (
+            <p className="whitespace-pre-wrap border-l-2 pl-3 text-xs leading-relaxed text-muted-foreground">
+              {quoted}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
 }

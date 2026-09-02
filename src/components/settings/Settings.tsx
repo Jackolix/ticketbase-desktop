@@ -24,6 +24,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { useUpdater } from '@/contexts/UpdaterContext';
+import { useAvailability } from '@/hooks/useAvailability';
 import { apiClient } from '@/lib/api';
 
 /** Mail setting ids, as expected by userMailSettings(type). */
@@ -56,8 +57,9 @@ export function Settings() {
     new_forward_mail: false,
   });
 
-  const [available, setAvailable] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Shared with the sidebar action, so the two cannot disagree.
+  const { isAvailable, isBusy: isAvailabilityBusy, setAvailable } = useAvailability();
 
   const fetchMailSettings = useCallback(async () => {
     if (!user) return;
@@ -71,45 +73,9 @@ export function Settings() {
     }
   }, [user]);
 
-  const fetchAvailability = useCallback(async () => {
-    if (!user) return;
-    try {
-      const response = await apiClient.getUserStatus(user.id);
-      setAvailable(Boolean(response.activity?.activeStatus ?? response.data?.activity?.activeStatus));
-    } catch (error) {
-      console.error('Failed to fetch availability:', error);
-    }
-  }, [user]);
-
   useEffect(() => {
     void fetchMailSettings();
-    void fetchAvailability();
-  }, [fetchMailSettings, fetchAvailability]);
-
-  /**
-   * Availability for today.
-   *
-   * The endpoints existed but nothing called them, so this could only be set
-   * from the web UI. Note the backend quirk: on the first change of a given day
-   * changeUserStatus creates the record with typ hardcoded to 1 while still
-   * reporting whatever was requested — so the response cannot be trusted and
-   * the real state is read back afterwards.
-   */
-  const toggleAvailability = async (next: boolean) => {
-    if (!user) return;
-    setBusy('availability');
-    try {
-      await apiClient.changeUserStatus(user.id, next ? 1 : 0);
-      await fetchAvailability();
-      toast.success(next ? 'Als verfügbar markiert' : 'Als nicht verfügbar markiert');
-    } catch (error) {
-      console.error('Failed to change availability:', error);
-      toast.error('Status konnte nicht geändert werden');
-      await fetchAvailability();
-    } finally {
-      setBusy(null);
-    }
-  };
+  }, [fetchMailSettings]);
 
   const saveProfile = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -195,20 +161,20 @@ export function Settings() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {available !== null && (
+          {isAvailable !== null && (
             <span
-              className={`text-xs ${available ? 'text-tone-success' : 'text-muted-foreground'}`}
+              className={`text-xs ${isAvailable ? 'text-tone-success' : 'text-muted-foreground'}`}
             >
-              {available ? 'Verfügbar' : 'Nicht verfügbar'}
+              {isAvailable ? 'Verfügbar' : 'Nicht verfügbar'}
             </span>
           )}
-          {busy === 'availability' ? (
+          {isAvailabilityBusy ? (
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           ) : (
             <Switch
-              checked={available ?? false}
-              onCheckedChange={(v) => void toggleAvailability(v)}
-              disabled={available === null}
+              checked={isAvailable ?? false}
+              onCheckedChange={(v) => void setAvailable(v)}
+              disabled={isAvailable === null}
               aria-label="Heute verfügbar"
             />
           )}

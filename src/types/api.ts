@@ -88,7 +88,13 @@ export interface TicketHistory {
   updated_at: string;
   service_start: number;
   service_end: number;
+  /**
+   * Billed time in MINUTES, rounded up to the customer's billing block
+   * (15 minutes by default) — see APITicketPlayerController::calculateTotalTime.
+   */
   total_time: number;
+  /** Time actually measured by the timer, in SECONDS, before rounding. */
+  raw_time?: number;
   user: User;
   status_name: string;
 }
