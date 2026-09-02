@@ -1,59 +1,268 @@
-import { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useAuth } from '@/contexts/AuthContext';
-import { apiClient } from '@/lib/api';
-import { WindowManager } from '@/lib/windowManager';
-import { Ticket, TicketHistory, TodoItem } from '@/types/api';
-import { TicketPlayerControls } from './TicketPlayerControls';
-import { TicketMessages } from './TicketMessages';
-import { FilePreviewModal } from '@/components/ui/FilePreviewModal';
+import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import {
+  AlertCircle,
   ArrowLeft,
-  Calendar,
   Building,
-  User,
-  Phone,
-  Clock,
-  Paperclip,
-  CheckCircle,
+  Calendar,
+  CheckCircle2,
   Circle,
-  Plus,
-  MessageSquare,
+  Clock,
   Download,
-  Loader2,
   ExternalLink,
+  Eye,
   FileText,
+  Forward,
   History,
   ListTodo,
-  Eye
+  Loader2,
+  MessageSquare,
+  Paperclip,
+  Phone,
+  Plus,
+  Receipt,
+  User,
+  UserPlus,
+  X,
 } from 'lucide-react';
+
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { FilePreviewModal } from '@/components/ui/FilePreviewModal';
+import { useAuth } from '@/contexts/AuthContext';
+import { apiClient } from '@/lib/api';
+import { syncRefresh } from '@/lib/sync';
+import { parseTicketDate } from '@/lib/ticketDate';
+import { normalizeTicketText, splitQuotedReply } from '@/lib/richText';
+import { parseTemplateData } from '@/lib/templateData';
+import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
+import { TONE_BADGE, priorityLabel, priorityTone, statusTone } from '@/lib/ticketStatus';
+import { WindowManager } from '@/lib/windowManager';
+import { Ticket, TicketHistory, TodoItem } from '@/types/api';
+import { ForwardTicketDialog } from './ForwardTicketDialog';
+import { TemplateFields } from './TemplateFields';
+import { TicketMessages } from './TicketMessages';
+import { TicketPlayerControls } from './TicketPlayerControls';
 
 interface TicketDetailProps {
   ticket: Ticket;
   onBack: () => void;
+  /**
+   * `embedded` renders inside the main window: a back arrow, and a button to
+   * pop the ticket out. `window` renders as its own window: a close button, and
+   * no pop-out, since it already is one.
+   */
+  variant?: 'embedded' | 'window';
 }
 
-export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
+/**
+ * Ticket detail.
+ *
+ * The content of the ticket — its description or its template fields — leads,
+ * rather than sitting behind a "Details" tab alongside the history. Everything
+ * a technician needs to identify the ticket sits in a sidebar, and the tabs
+ * hold only the things they act on: history, tasks and messages.
+ */
+export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDetailProps) {
   const { user } = useAuth();
-  const [ticketHistory, setTicketHistory] = useState<TicketHistory[]>([]);
-  const [todos, setTodos] = useState<TodoItem[]>([]);
-  const [newTodo, setNewTodo] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [isAddingTodo, setIsAddingTodo] = useState(false);
-  const [newHistoryText, setNewHistoryText] = useState('');
-  const [newHistoryStatus, setNewHistoryStatus] = useState('3'); // Default to "In Progress"
-  const [newHistoryTime, setNewHistoryTime] = useState<string>(''); // Custom time in minutes
-  const [isAddingHistory, setIsAddingHistory] = useState(false);
-  const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
-  const [previewFile, setPreviewFile] = useState<{ filename: string; ticketId: number } | null>(null);
 
-  const handleOpenInNewWindow = async () => {
+  const [history, setHistory] = useState<TicketHistory[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [newTodo, setNewTodo] = useState('');
+  const [isAddingTodo, setIsAddingTodo] = useState(false);
+
+  const [entryText, setEntryText] = useState('');
+  const [entryStatus, setEntryStatus] = useState('3');
+  const [entryMinutes, setEntryMinutes] = useState('');
+  const [isSavingEntry, setIsSavingEntry] = useState(false);
+
+  const [downloading, setDownloading] = useState<Set<string>>(new Set());
+  const [previewFile, setPreviewFile] = useState<string | null>(null);
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [isForwardOpen, setIsForwardOpen] = useState(false);
+
+  const templateFields = parseTemplateData(ticket.template_data, {
+    omitValues: [ticket.description],
+  });
+  const hasDescription = Boolean(ticket.description?.trim());
+
+  const fetchHistory = useCallback(async () => {
+    try {
+      const response = await apiClient.getTicketData(ticket.id);
+      if (response.status === 'success' && response.ticket_data) {
+        setHistory(response.ticket_data);
+        setLoadError(null);
+      }
+    } catch (error) {
+      console.error('Failed to fetch ticket history:', error);
+      setLoadError('Der Verlauf konnte nicht geladen werden.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [ticket.id]);
+
+  const fetchTodos = useCallback(async () => {
+    try {
+      const response = await apiClient.getCheckList(ticket.id);
+      if (response.status === 'success' && response.check_list) {
+        setTodos(response.check_list);
+      }
+    } catch (error) {
+      console.error('Failed to fetch tasks:', error);
+    }
+  }, [ticket.id]);
+
+  useEffect(() => {
+    setIsLoading(true);
+    void fetchHistory();
+    void fetchTodos();
+  }, [fetchHistory, fetchTodos]);
+
+  /**
+   * Claims an unassigned ticket. Server-side this sets my_ticket_id, moves the
+   * ticket to "Zugewiesen" and pushes a notification; it refuses if someone
+   * already has a timer running on it.
+   */
+  const handleClaim = async () => {
+    if (!user) return;
+    setIsClaiming(true);
+    try {
+      const response = await apiClient.ticketTerminieren(
+        ticket.id,
+        user.id,
+        new Date().toISOString().slice(0, 10),
+      );
+      if (response.result === 'success') {
+        toast.success(`Ticket #${ticket.id} übernommen`);
+        await syncRefresh();
+      } else {
+        toast.error('Ticket konnte nicht übernommen werden', {
+          description: response.message || 'Es ist möglicherweise bereits vergeben.',
+        });
+      }
+    } catch (error) {
+      console.error('Failed to claim ticket:', error);
+      toast.error('Ticket konnte nicht übernommen werden');
+    } finally {
+      setIsClaiming(false);
+    }
+  };
+
+  const handleAddTodo = async () => {
+    if (!user || !newTodo.trim()) return;
+    setIsAddingTodo(true);
+    try {
+      const response = await apiClient.newTodo(ticket.id, user.id, newTodo);
+      // The backend spells this "sucess"; accept both rather than depend on it.
+      if (response.status === 'sucess' || response.status === 'success') {
+        if (response.check_list) setTodos(response.check_list);
+        setNewTodo('');
+      } else {
+        toast.error('Aufgabe konnte nicht angelegt werden');
+      }
+    } catch (error) {
+      console.error('Failed to add task:', error);
+      toast.error('Aufgabe konnte nicht angelegt werden');
+    } finally {
+      setIsAddingTodo(false);
+    }
+  };
+
+  const handleToggleTodo = async (todoId: number, checked: number) => {
+    const next = checked ? 0 : 1;
+    setTodos((list) => list.map((t) => (t.id === todoId ? { ...t, checked: next } : t)));
+
+    try {
+      const response = await apiClient.checkTodo(todoId, next);
+      if (response.status !== 'success') throw new Error(response.message);
+    } catch (error) {
+      console.error('Failed to toggle task:', error);
+      setTodos((list) => list.map((t) => (t.id === todoId ? { ...t, checked } : t)));
+      toast.error('Aufgabe konnte nicht geändert werden');
+    }
+  };
+
+  const handleSaveEntry = async () => {
+    if (!user || !entryText.trim()) return;
+    setIsSavingEntry(true);
+    try {
+      const minutes = parseInt(entryMinutes, 10) || 0;
+      if (minutes > 0) {
+        await apiClient.correctWatch({
+          ticket_id: ticket.id,
+          user_id: user.id,
+          old_time: 0,
+          new_time: minutes,
+        });
+      }
+
+      const response = await apiClient.saveTicketHistory({
+        ticket_id: ticket.id,
+        user_id: user.id,
+        verlauf_text: entryText,
+        status_id: parseInt(entryStatus, 10),
+        sendMail: 0,
+      });
+
+      if (response.status === 'success') {
+        setEntryText('');
+        setEntryMinutes('');
+        toast.success('Eintrag gespeichert');
+        await fetchHistory();
+        await syncRefresh();
+      } else {
+        toast.error('Eintrag konnte nicht gespeichert werden', {
+          description: response.message,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to save history entry:', error);
+      toast.error('Eintrag konnte nicht gespeichert werden');
+    } finally {
+      setIsSavingEntry(false);
+    }
+  };
+
+  const handleDownload = async (filename: string) => {
+    setDownloading((s) => new Set(s).add(filename));
+    try {
+      const blob = await apiClient.downloadAttachment(ticket.id, filename);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download attachment:', error);
+      toast.error(`"${filename}" konnte nicht geladen werden`);
+    } finally {
+      setDownloading((s) => {
+        const next = new Set(s);
+        next.delete(filename);
+        return next;
+      });
+    }
+  };
+
+  const openTicketWindow = async () => {
     try {
       await WindowManager.openTicketInNewWindow(ticket);
     } catch (error) {
@@ -61,674 +270,568 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     }
   };
 
-  useEffect(() => {
-    fetchTicketData();
-    fetchTodos();
-  }, [ticket.id]);
-
-  const fetchTicketData = async () => {
-    try {
-      const response = await apiClient.getTicketData(ticket.id);
-      if (response.status === 'success' && response.ticket_data) {
-        setTicketHistory(response.ticket_data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch ticket data:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchTodos = async () => {
-    try {
-      const response = await apiClient.getCheckList(ticket.id);
-      if (response.status === 'success' && response.check_list) {
-        setTodos(response.check_list);
-      }
-    } catch (error) {
-      console.error('Failed to fetch todos:', error);
-    }
-  };
-
-  const handleAddTodo = async () => {
-    if (!user || !newTodo.trim()) return;
-
-    setIsAddingTodo(true);
-    try {
-      const response = await apiClient.newTodo(ticket.id, user.id, newTodo);
-      if (response.status === 'sucess' && response.check_list) {
-        setTodos(response.check_list);
-        setNewTodo('');
-      }
-    } catch (error) {
-      console.error('Failed to add todo:', error);
-    } finally {
-      setIsAddingTodo(false);
-    }
-  };
-
-  const handleToggleTodo = async (todoId: number, checked: number) => {
-    try {
-      const response = await apiClient.checkTodo(todoId, checked ? 0 : 1);
-      if (response.status === 'success') {
-        setTodos(todos.map(todo => 
-          todo.id === todoId ? { ...todo, checked: checked ? 0 : 1 } : todo
-        ));
-      }
-    } catch (error) {
-      console.error('Failed to toggle todo:', error);
-    }
-  };
-
-  const handleAddHistory = async () => {
-    if (!user || !newHistoryText.trim()) return;
-
-    setIsAddingHistory(true);
-    try {
-      // If custom time is provided, set it using correctWatch API first
-      const timeInMinutes = parseInt(newHistoryTime) || 0;
-      if (timeInMinutes > 0) {
-        await apiClient.correctWatch({
-          ticket_id: ticket.id,
-          user_id: user.id,
-          old_time: 0, // No previous time for manual entry
-          new_time: timeInMinutes,
-        });
-      }
-
-      const response = await apiClient.saveTicketHistory({
-        ticket_id: ticket.id,
-        user_id: user.id,
-        verlauf_text: newHistoryText,
-        status_id: parseInt(newHistoryStatus),
-        sendMail: 0, // Don't send email by default
-      });
-
-      if (response.status === 'success') {
-        setNewHistoryText('');
-        setNewHistoryTime('');
-        // Refresh ticket history
-        await fetchTicketData();
-      }
-    } catch (error) {
-      console.error('Failed to add history:', error);
-    } finally {
-      setIsAddingHistory(false);
-    }
-  };
-
-  const getPriorityColor = (priority: string, index: number) => {
-    if (priority === 'High' || index > 7) return 'destructive';
-    if (priority === 'Medium' || index > 4) return 'default';
-    return 'secondary';
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'new': return 'default';
-      case 'in progress': return 'secondary';
-      case 'closed': return 'outline';
-      default: return 'secondary';
-    }
-  };
-
-  const formatDate = (dateString: string) => {
-    if (!dateString) return 'No date';
-    try {
-      // Handle DD-MM-YYYY HH:mm format
-      const match = dateString.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
-      if (match) {
-        const [, day, month, year, hour, minute] = match;
-        const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(minute));
-        if (!isNaN(date.getTime())) {
-          return date.toLocaleString();
-        }
-      }
-
-      // Handle DD-MM-YYYY format without time
-      const matchWithoutTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-      if (matchWithoutTime) {
-        const [, day, month, year] = matchWithoutTime;
-        const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-        if (!isNaN(date.getTime())) {
-          return date.toLocaleDateString(undefined, {
-            month: 'short',
-            day: 'numeric'
-          });
-        }
-      }
-
-      // Fallback to standard date parsing
-      const date = new Date(dateString);
-      if (!isNaN(date.getTime())) {
-        return date.toLocaleString();
-      }
-      return 'Invalid Date';
-    } catch {
-      return 'Invalid Date';
-    }
-  };
-
-  const decodeHtmlEntities = (text: string) => {
-    const textarea = document.createElement('textarea');
-    textarea.innerHTML = text;
-    return textarea.value;
-  };
-
-  const stripHtmlTags = (html: string) => {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || '';
-  };
-
-  // Get effective description from ticket (description or template_data)
-  const getTicketDescription = (ticket: Ticket) => {
-    if (ticket.description && ticket.description.trim()) {
-      return ticket.description;
-    }
-    
-    // If description is empty, try to extract meaningful content from template_data
-    if (ticket.template_data && ticket.template_data.trim()) {
-      try {
-        const templateData = JSON.parse(ticket.template_data);
-        if (typeof templateData === 'object' && templateData !== null) {
-          // For detail view, show template data in a more structured way
-          return Object.entries(templateData)
-            .filter(([, value]) => value && typeof value === 'string' && value.trim())
-            .map(([key, value]) => `${key}: ${value}`)
-            .join('\n') || 'Custom template data';
-        }
-      } catch {
-        // If parsing fails, return the raw template data
-        return ticket.template_data;
-      }
-    }
-    
-    return 'No description available';
-  };
-
-  const handlePreviewAttachment = (filename: string) => {
-    setPreviewFile({ filename, ticketId: ticket.id });
-  };
-
-  const handleDownloadAttachment = async (filename: string) => {
-    setDownloadingFiles(prev => new Set(prev).add(filename));
-
-    try {
-      const blob = await apiClient.downloadAttachment(ticket.id, filename);
-
-      // Create download link
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Failed to download attachment:', error);
-    } finally {
-      setDownloadingFiles(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(filename);
-        return newSet;
-      });
-    }
-  };
-
-  // Helper function to safely render values that might be objects
-  const safeRender = (value: any): string => {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number') return String(value);
-    if (typeof value === 'object') {
-      // If it's an object, try common property names
-      if ('filename' in value) return value.filename;
-      if ('name' in value) return value.name;
-      if ('value' in value) return value.value;
-      return JSON.stringify(value);
-    }
-    return String(value);
-  };
+  const openTodos = todos.filter((t) => !t.checked).length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center gap-4">
-        <Button variant="outline" size="icon" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2 mb-2">
-            <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
-              #{ticket.id}
+      <div className="flex items-start gap-3">
+        {variant === 'embedded' && (
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={onBack}
+            aria-label="Zurück"
+            className="mt-0.5 h-8 w-8 shrink-0"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        )}
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge
+              variant="outline"
+              className={`${TONE_BADGE[statusTone(ticket.status)]} px-1.5 py-0 text-[10px]`}
+            >
+              {ticket.status || '—'}
             </Badge>
-            <Badge variant={getStatusColor(ticket.status)}>
-              {safeRender(ticket.status)}
+            <Badge
+              variant="outline"
+              className={`${TONE_BADGE[priorityTone(ticket.priority, ticket.index)]} px-1.5 py-0 text-[10px]`}
+            >
+              {priorityLabel(ticket.priority)}
             </Badge>
-            {ticket.priority && (
-              <Badge variant="outline">
-                {safeRender(ticket.priority)}
-              </Badge>
+            {ticket.pool_name && (
+              <span className="text-[11px] text-muted-foreground">{ticket.pool_name}</span>
             )}
           </div>
-          <h1 className="text-2xl font-bold">{safeRender(ticket.summary)}</h1>
-          <p className="text-muted-foreground">{safeRender(ticket.subject)}</p>
+          <h1 className="mt-1 text-lg font-semibold leading-snug">{ticket.summary || '—'}</h1>
+          {ticket.subject && (
+            <p className="text-sm text-muted-foreground">{ticket.subject}</p>
+          )}
         </div>
-        <Button variant="outline" size="icon" onClick={handleOpenInNewWindow}>
-          <ExternalLink className="h-4 w-4" />
-        </Button>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {ticket.my_ticket_id === 0 && (
+            <Button onClick={handleClaim} disabled={isClaiming} size="sm" className="h-8 gap-1.5">
+              {isClaiming ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <UserPlus className="h-3.5 w-3.5" />
+              )}
+              Übernehmen
+            </Button>
+          )}
+          {ticket.my_ticket_id !== 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsForwardOpen(true)}
+              className="h-8 gap-1.5"
+            >
+              <Forward className="h-3.5 w-3.5" />
+              Weiterleiten
+            </Button>
+          )}
+          {variant === 'embedded' ? (
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={openTicketWindow}
+              aria-label="In neuem Fenster öffnen"
+              className="h-8 w-8"
+            >
+              <ExternalLink className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onBack}
+              aria-label="Fenster schließen"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Content */}
-        <div className="lg:col-span-2 space-y-6">
-          <Tabs defaultValue="details" className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+        {/* Main column */}
+        <div className="min-w-0 space-y-4">
+          {/* The ticket's actual content, not hidden behind a tab. */}
+          <Card className="py-0">
+            <div className="flex items-center gap-1.5 border-b px-3 py-2">
+              <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+              <h2 className="text-xs font-semibold uppercase tracking-wide">
+                {templateFields.length > 0 && !hasDescription ? 'Formular' : 'Beschreibung'}
+              </h2>
+            </div>
+            <CardContent className="space-y-4 p-3">
+              {hasDescription && (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                  {normalizeTicketText(ticket.description)}
+                </p>
+              )}
+
+              {templateFields.length > 0 && (
+                <>
+                  {hasDescription && <div className="border-t pt-3" />}
+                  <TemplateFields templateData={ticket.template_data} omitValues={[ticket.description]} />
+                </>
+              )}
+
+              {!hasDescription && templateFields.length === 0 && (
+                <p className="text-sm italic text-muted-foreground">
+                  Keine Beschreibung vorhanden
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          {ticket.attachments.length > 0 && (
+            <Card className="py-0">
+              <div className="flex items-center gap-1.5 border-b px-3 py-2">
+                <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+                <h2 className="text-xs font-semibold uppercase tracking-wide">Anhänge</h2>
+                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {ticket.attachments.length}
+                </span>
+              </div>
+              <ul className="divide-y">
+                {ticket.attachments.map((filename) => (
+                  <li key={filename} className="flex items-center gap-2 px-3 py-2">
+                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <button
+                      type="button"
+                      onClick={() => setPreviewFile(filename)}
+                      className="min-w-0 flex-1 truncate text-left text-xs hover:underline"
+                    >
+                      {filename}
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => setPreviewFile(filename)}
+                      aria-label={`${filename} ansehen`}
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => void handleDownload(filename)}
+                      disabled={downloading.has(filename)}
+                      aria-label={`${filename} herunterladen`}
+                    >
+                      {downloading.has(filename) ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Download className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          <Tabs defaultValue="history">
             <TabsList>
-              <TabsTrigger value="details">
-                <FileText className="w-4 h-4 mr-2" />
-                Details
-              </TabsTrigger>
-              <TabsTrigger value="history">
-                <History className="w-4 h-4 mr-2" />
-                History
-              </TabsTrigger>
-              <TabsTrigger value="todos">
-                <ListTodo className="w-4 h-4 mr-2" />
-                Todos
-                {todos.length > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className="ml-2 h-5 px-1.5 text-xs bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors duration-200"
-                  >
-                    {todos.filter(t => !t.checked).length}/{todos.length}
-                  </Badge>
+              <TabsTrigger value="history" className="gap-1.5 text-xs">
+                <History className="h-3.5 w-3.5" /> Verlauf
+                {history.length > 0 && (
+                  <span className="font-mono text-[10px] tabular-nums opacity-70">
+                    {history.length}
+                  </span>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="messages">
-                <MessageSquare className="w-4 h-4 mr-2" />
-                Messages
+              <TabsTrigger value="todos" className="gap-1.5 text-xs">
+                <ListTodo className="h-3.5 w-3.5" /> Aufgaben
+                {openTodos > 0 && (
+                  <span className="font-mono text-[10px] tabular-nums opacity-70">{openTodos}</span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="messages" className="gap-1.5 text-xs">
+                <MessageSquare className="h-3.5 w-3.5" /> Nachrichten
+                {ticket.ticketMessagesCount > 0 && (
+                  <span className="font-mono text-[10px] tabular-nums opacity-70">
+                    {ticket.ticketMessagesCount}
+                  </span>
+                )}
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="details" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Description</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="whitespace-pre-wrap">{getTicketDescription(ticket)}</p>
-                  
-                  {ticket.attachments && ticket.attachments.length > 0 && (
-                    <div className="mt-4">
-                      <h4 className="font-medium mb-2 flex items-center gap-2">
-                        <Paperclip className="h-4 w-4" />
-                        Attachments
-                      </h4>
-                      <div className="space-y-2">
-                        {ticket.attachments.map((attachment, index) => {
-                          let filename = '';
-                          if (typeof attachment === 'string') {
-                            filename = attachment;
-                          } else if (attachment && typeof attachment === 'object') {
-                            // Handle object attachments - extract filename from various possible properties
-                            filename = safeRender(attachment.filename || attachment.attachment || attachment);
-                          }
-                          return (
-                            <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded hover:bg-muted/80 transition-colors group">
-                              <Paperclip className="h-4 w-4 text-muted-foreground" />
-                              <span className="text-sm flex-1 cursor-pointer" onClick={() => handlePreviewAttachment(filename)}>
-                                {filename}
-                              </span>
-                              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  onClick={() => handlePreviewAttachment(filename)}
-                                  title="Preview file"
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  onClick={() => handleDownloadAttachment(filename)}
-                                  disabled={downloadingFiles.has(filename)}
-                                  title="Download file"
-                                >
-                                  {downloadingFiles.has(filename) ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                  ) : (
-                                    <Download className="h-4 w-4" />
-                                  )}
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Company & Contact Information</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Building className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">Company</span>
-                      </div>
-                      <p>{safeRender(ticket.company.name)}</p>
-                      <p className="text-sm text-muted-foreground">{safeRender(ticket.company.companyAdress)}</p>
-                      <p className="text-sm text-muted-foreground">{safeRender(ticket.company.companyZip)}</p>
-                      {ticket.company.companyPhone && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Phone className="h-3 w-3" />
-                          <span>{safeRender(ticket.company.companyPhone)}</span>
-                        </div>
-                      )}
-                      {ticket.company.companyMail && (
-                        <p className="text-sm text-muted-foreground break-all">
-                          {safeRender(ticket.company.companyMail)}
-                        </p>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <User className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">Contact</span>
-                      </div>
-                      <p>{safeRender(ticket.ticketUser)}</p>
-                      {ticket.ticketUserPhone && (
-                        <div className="flex items-center gap-2">
-                          <Phone className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm">{safeRender(ticket.ticketUserPhone)}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="history" className="space-y-4">
-              {/* Add New History Entry Form */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Add History Entry</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
+            <TabsContent value="history" className="mt-3 space-y-3">
+              <Card className="py-0">
+                <div className="border-b px-3 py-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide">Eintrag hinzufügen</h2>
+                </div>
+                <CardContent className="space-y-3 p-3">
                   <Textarea
-                    placeholder="Enter history details..."
-                    value={newHistoryText}
-                    onChange={(e) => setNewHistoryText(e.target.value)}
-                    disabled={isAddingHistory}
+                    value={entryText}
+                    onChange={(e) => setEntryText(e.target.value)}
+                    placeholder="Was wurde gemacht?"
                     rows={3}
+                    className="text-sm"
                   />
-                  <div className="space-y-2">
-                    <div className="flex gap-2 items-center">
-                      <Select value={newHistoryStatus} onValueChange={setNewHistoryStatus}>
-                        <SelectTrigger className="w-[200px]">
-                          <SelectValue placeholder="Select status" />
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                        Status
+                      </Label>
+                      <Select value={entryStatus} onValueChange={setEntryStatus}>
+                        <SelectTrigger className="h-8 w-[220px] text-xs">
+                          <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="1">Neu</SelectItem>
-                          <SelectItem value="2">Terminiert</SelectItem>
-                          <SelectItem value="3">Prüfen</SelectItem>
-                          <SelectItem value="4">Abgeschlossen</SelectItem>
-                          <SelectItem value="5">Offen</SelectItem>
-                          <SelectItem value="6">Vor Ort</SelectItem>
-                          <SelectItem value="8">Wieder geöffnet</SelectItem>
-                          <SelectItem value="9">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
-                          <SelectItem value="11">Warten auf Rückmeldung (Extern)</SelectItem>
+                          {TICKET_STATUS_OPTIONS.map((option) => (
+                            <SelectItem key={option.id} value={option.id} className="text-xs">
+                              {option.label}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                        Zeit (Min.)
+                      </Label>
                       <Input
                         type="number"
                         min="0"
-                        placeholder="Time (minutes)"
-                        value={newHistoryTime}
-                        onChange={(e) => setNewHistoryTime(e.target.value)}
-                        disabled={isAddingHistory}
-                        className="w-[150px]"
+                        value={entryMinutes}
+                        onChange={(e) => setEntryMinutes(e.target.value)}
+                        placeholder="0"
+                        className="h-8 w-[100px] text-xs"
                       />
-                      <Button
-                        onClick={handleAddHistory}
-                        disabled={isAddingHistory || !newHistoryText.trim()}
-                        className="ml-auto bg-primary hover:bg-primary/90 text-primary-foreground shadow-md hover:shadow-lg transition-all duration-200"
-                        size="sm"
-                      >
-                        {isAddingHistory ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Plus className="h-4 w-4 mr-2" />
-                        )}
-                        Add Entry
-                      </Button>
                     </div>
+                    <Button
+                      onClick={handleSaveEntry}
+                      disabled={isSavingEntry || !entryText.trim()}
+                      size="sm"
+                      className="ml-auto h-8 gap-1.5 text-xs"
+                    >
+                      {isSavingEntry && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Speichern
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
 
-              {/* History Entries */}
               {isLoading ? (
-                <div className="space-y-4">
-                  {[1, 2, 3].map((i) => (
-                    <Card key={i} className="animate-pulse">
-                      <CardContent className="p-4">
-                        <div className="h-4 bg-muted rounded w-1/4 mb-2" />
-                        <div className="h-6 bg-muted rounded w-3/4 mb-2" />
-                        <div className="h-4 bg-muted rounded w-1/2" />
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }, (_, i) => (
+                    <Card key={i} className="animate-pulse py-0">
+                      <CardContent className="space-y-2 p-3">
+                        <div className="h-3 w-1/4 rounded bg-muted" />
+                        <div className="h-3 w-3/4 rounded bg-muted" />
                       </CardContent>
                     </Card>
                   ))}
                 </div>
+              ) : history.length === 0 ? (
+                // A failed load and an empty history used to look identical.
+                <Card className={loadError ? 'border-destructive/40 py-0' : 'py-0'}>
+                  <CardContent className="space-y-3 p-8 text-center">
+                    {loadError ? (
+                      <>
+                        <AlertCircle className="mx-auto h-8 w-8 text-destructive" />
+                        <p className="text-xs text-muted-foreground">{loadError}</p>
+                        <Button variant="outline" size="sm" onClick={() => void fetchHistory()}>
+                          Erneut versuchen
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <History className="mx-auto h-8 w-8 text-muted-foreground" />
+                        <p className="text-xs text-muted-foreground">Noch keine Einträge</p>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
               ) : (
-                <>
-                  {ticketHistory.map((entry) => (
-                    <Card key={entry.id} className="transition-all duration-200 hover:shadow-md border-l-4 border-l-primary/20 hover:border-l-primary/50">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="p-1.5 bg-primary/10 rounded-full">
-                              <User className="h-4 w-4 text-primary" />
+                <ol className="space-y-2">
+                  {history.map((entry) => (
+                    <li key={entry.id}>
+                      <Card className="py-0">
+                        <CardContent className="space-y-1.5 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <User className="h-3 w-3 text-muted-foreground" />
+                              <span className="text-xs font-medium">{entry.user?.name || '—'}</span>
+                              {entry.status_name && (
+                                <Badge
+                                  variant="outline"
+                                  className={`${TONE_BADGE[statusTone(entry.status_name)]} px-1.5 py-0 text-[10px]`}
+                                >
+                                  {entry.status_name}
+                                </Badge>
+                              )}
                             </div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{entry.user.name}</span>
-                              <Badge variant="outline" className="bg-background border-primary/20 text-primary">
-                                {entry.status_name}
-                              </Badge>
-                            </div>
+                            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                              {formatDate(entry.created_at)}
+                            </span>
                           </div>
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Calendar className="h-3 w-3" />
-                            {formatDate(entry.created_at)}
-                          </div>
-                        </div>
-                      </CardHeader>
-                      {entry.technician_reply && (
-                        <CardContent>
-                          <p className="whitespace-pre-wrap">{stripHtmlTags(decodeHtmlEntities(entry.technician_reply))}</p>
-                          {entry.total_time > 0 && (
-                            <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-                              <Clock className="h-3 w-3" />
-                              Time spent: {Math.floor(entry.total_time / 60)} minutes
+
+                          {entry.technician_reply && (
+                            <HistoryText raw={entry.technician_reply} />
+                          )}
+
+                          {/* Two different numbers, and technicians care about
+                              both: what was measured, and what the customer is
+                              billed after rounding up to the billing block.
+                              The old code divided the billed minutes by 60 and
+                              labelled the result "minutes", so anything under
+                              an hour displayed as 0. */}
+                          {(entry.total_time > 0 || (entry.raw_time ?? 0) > 0) && (
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                              {entry.total_time > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Receipt className="h-3 w-3" />
+                                  <span className="tabular-nums">
+                                    {formatMinutes(entry.total_time)}
+                                  </span>
+                                  <span className="opacity-70">berechnet</span>
+                                </span>
+                              )}
+                              {(entry.raw_time ?? 0) > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="h-3 w-3" />
+                                  <span className="tabular-nums">
+                                    {formatMinutes(Math.round((entry.raw_time ?? 0) / 60))}
+                                  </span>
+                                  <span className="opacity-70">erfasst</span>
+                                </span>
+                              )}
                             </div>
                           )}
                         </CardContent>
-                      )}
-                    </Card>
+                      </Card>
+                    </li>
                   ))}
-                  {ticketHistory.length === 0 && (
-                    <Card>
-                      <CardContent className="p-8 text-center">
-                        <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                        <p className="text-muted-foreground">No history entries yet</p>
-                      </CardContent>
-                    </Card>
-                  )}
-                </>
+                </ol>
               )}
             </TabsContent>
 
-            <TabsContent value="todos" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Add New Todo</CardTitle>
-                </CardHeader>
-                <CardContent>
+            <TabsContent value="todos" className="mt-3 space-y-3">
+              <Card className="py-0">
+                <CardContent className="p-3">
                   <div className="flex gap-2">
                     <Input
-                      placeholder="Enter new todo..."
                       value={newTodo}
                       onChange={(e) => setNewTodo(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleAddTodo()}
+                      placeholder="Neue Aufgabe…"
                       disabled={isAddingTodo}
+                      className="h-8 text-xs"
                     />
-                    <Button 
-                      onClick={handleAddTodo} 
+                    <Button
+                      onClick={handleAddTodo}
                       disabled={isAddingTodo || !newTodo.trim()}
-                      className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-md hover:shadow-lg transition-all duration-200 px-3"
-                      size="sm"
+                      size="icon"
+                      className="h-8 w-8 shrink-0"
+                      aria-label="Aufgabe hinzufügen"
                     >
                       {isAddingTodo ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
-                        <Plus className="h-4 w-4" />
+                        <Plus className="h-3.5 w-3.5" />
                       )}
                     </Button>
                   </div>
                 </CardContent>
               </Card>
 
-              <div className="space-y-3">
-                {todos.map((todo) => (
-                  <Card 
-                    key={todo.id} 
-                    className={`transition-all duration-200 hover:shadow-md ${
-                      todo.checked 
-                        ? 'bg-muted/30 border-green-200/50 dark:border-green-800/50' 
-                        : 'hover:border-primary/30 border-l-4 border-l-transparent hover:border-l-primary/50'
-                    }`}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-center gap-3">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="p-1 h-auto rounded-full hover:bg-muted/50 transition-all duration-200 group"
-                          onClick={() => handleToggleTodo(todo.id, todo.checked)}
+              {todos.length === 0 ? (
+                <Card className="py-0">
+                  <CardContent className="p-8 text-center">
+                    <ListTodo className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+                    <p className="text-xs text-muted-foreground">Keine Aufgaben</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="py-0">
+                  <ul className="divide-y">
+                    {todos.map((todo) => (
+                      <li key={todo.id}>
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleTodo(todo.id, todo.checked)}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent/50"
                         >
                           {todo.checked ? (
-                            <CheckCircle className="h-5 w-5 text-green-500 transition-all duration-200 group-hover:scale-110" />
+                            <CheckCircle2 className="h-4 w-4 shrink-0 text-tone-success" />
                           ) : (
-                            <Circle className="h-5 w-5 text-muted-foreground transition-all duration-200 group-hover:text-primary group-hover:scale-110" />
+                            <Circle className="h-4 w-4 shrink-0 text-muted-foreground" />
                           )}
-                        </Button>
-                        <div className="flex-1">
-                          <p className={`transition-all duration-200 ${
-                            todo.checked 
-                              ? 'line-through text-muted-foreground' 
-                              : 'text-foreground font-medium'
-                          }`}>
+                          <span
+                            className={[
+                              'flex-1 text-xs',
+                              todo.checked ? 'text-muted-foreground line-through' : '',
+                            ].join(' ')}
+                          >
                             {todo.to_do}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Added {formatDate(todo.created_at)}
-                          </p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-                {todos.length === 0 && (
-                  <Card className="border-dashed">
-                    <CardContent className="p-8 text-center">
-                      <div className="p-3 bg-muted/30 rounded-full w-fit mx-auto mb-4">
-                        <ListTodo className="h-8 w-8 text-muted-foreground" />
-                      </div>
-                      <p className="text-muted-foreground font-medium">No todos yet</p>
-                      <p className="text-sm text-muted-foreground/70 mt-1">Add your first todo item above</p>
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
             </TabsContent>
 
-            <TabsContent value="messages">
+            <TabsContent value="messages" className="mt-3">
               <TicketMessages ticketId={ticket.id} />
             </TabsContent>
           </Tabs>
         </div>
 
         {/* Sidebar */}
-        <div className="space-y-6">
-          {/* Ticket Player Controls */}
+        <div className="space-y-4">
           <TicketPlayerControls ticket={ticket} />
 
-          {/* Ticket Info */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Ticket Information</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 gap-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Created:</span>
-                  <span>{formatDate(ticket.created_at)}</span>
-                </div>
-                {ticket.ticket_start && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Scheduled:</span>
-                    <span>{formatDate(ticket.ticket_start)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Creator:</span>
-                  <span>{safeRender(ticket.ticketCreator)}</span>
-                </div>
-                {ticket.ticketTerminatedUser && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Assigned:</span>
-                    <span>{safeRender(ticket.ticketTerminatedUser)}</span>
-                  </div>
-                )}
-                {ticket.pool_name && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Pool:</span>
-                    <span>{safeRender(ticket.pool_name)}</span>
-                  </div>
-                )}
-                {ticket.ticketMessagesCount > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Messages:</span>
-                    <Badge variant="secondary">{ticket.ticketMessagesCount}</Badge>
-                  </div>
-                )}
-              </div>
+          <Card className="py-0">
+            <div className="flex items-center gap-1.5 border-b px-3 py-2">
+              <Building className="h-3.5 w-3.5 text-muted-foreground" />
+              <h2 className="text-xs font-semibold uppercase tracking-wide">Kunde</h2>
+            </div>
+            <CardContent className="space-y-2 p-3">
+              <p className="text-sm font-medium">{ticket.company?.name || '—'}</p>
+              {ticket.company?.number && (
+                <p className="font-mono text-[11px] text-muted-foreground">
+                  {ticket.company.number}
+                </p>
+              )}
+              {ticket.ticketUser && (
+                <Meta icon={User} label="Ansprechpartner" value={ticket.ticketUser} />
+              )}
+              {ticket.ticketUserPhone && (
+                <Meta icon={Phone} label="Telefon" value={ticket.ticketUserPhone} mono />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="py-0">
+            <div className="flex items-center gap-1.5 border-b px-3 py-2">
+              <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+              <h2 className="text-xs font-semibold uppercase tracking-wide">Details</h2>
+            </div>
+            <CardContent className="space-y-2 p-3">
+              <Meta icon={Calendar} label="Erstellt" value={formatDate(ticket.created_at)} mono />
+              {ticket.ticket_start && (
+                <Meta icon={Clock} label="Terminiert" value={formatDate(ticket.ticket_start)} mono />
+              )}
+              {ticket.ticketCreator && (
+                <Meta icon={User} label="Ersteller" value={ticket.ticketCreator} />
+              )}
+              {ticket.ticketTerminatedUser && (
+                <Meta icon={UserPlus} label="Zugewiesen" value={ticket.ticketTerminatedUser} />
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* File Preview Modal */}
+      <ForwardTicketDialog
+        ticket={ticket}
+        open={isForwardOpen}
+        onOpenChange={setIsForwardOpen}
+        onForwarded={() => void fetchHistory()}
+      />
+
       {previewFile && (
         <FilePreviewModal
-          isOpen={!!previewFile}
+          isOpen={Boolean(previewFile)}
           onClose={() => setPreviewFile(null)}
-          filename={previewFile.filename}
-          ticketId={previewFile.ticketId}
-          onDownload={() => handleDownloadAttachment(previewFile.filename)}
-          isDownloading={downloadingFiles.has(previewFile.filename)}
+          filename={previewFile}
+          ticketId={ticket.id}
+          onDownload={() => void handleDownload(previewFile)}
+          isDownloading={downloading.has(previewFile)}
         />
+      )}
+    </div>
+  );
+}
+
+function Meta({
+  icon: Icon,
+  label,
+  value,
+  mono,
+}: {
+  icon: typeof User;
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <Icon className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">
+        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className={`break-words text-xs ${mono ? 'font-mono tabular-nums' : ''}`}>{value}</p>
+      </div>
+    </div>
+  );
+}
+
+/** Minutes as `1:45 h` past the hour, plain minutes below it. */
+function formatMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0 Min.';
+  if (minutes < 60) return `${minutes} Min.`;
+
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours}:${rest.toString().padStart(2, '0')} h`;
+}
+
+function formatDate(value: string): string {
+  if (!value) return '—';
+  const parsed = parseTicketDate(value);
+  return parsed ? parsed.toLocaleString(undefined, {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }) : value;
+}
+
+/**
+ * A history entry's text, with any quoted email thread collapsed.
+ *
+ * Entries are often pasted mail. The backend strips the tags but leaves the
+ * whitespace, so the text arrives with three or four blank lines between every
+ * paragraph; normalizeTicketText collapses those.
+ */
+function HistoryText({ raw }: { raw: string }) {
+  const [showQuoted, setShowQuoted] = useState(false);
+  const { body, quoted } = splitQuotedReply(normalizeTicketText(raw));
+
+  return (
+    <div className="space-y-1.5">
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{body}</p>
+
+      {quoted && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowQuoted((open) => !open)}
+            className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {showQuoted ? 'Zitierten Verlauf ausblenden' : 'Zitierten Verlauf anzeigen'}
+          </button>
+          {showQuoted && (
+            <p className="whitespace-pre-wrap border-l-2 pl-3 text-xs leading-relaxed text-muted-foreground">
+              {quoted}
+            </p>
+          )}
+        </>
       )}
     </div>
   );

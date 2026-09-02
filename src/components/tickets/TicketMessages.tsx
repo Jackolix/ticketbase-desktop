@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -34,20 +34,13 @@ export function TicketMessages({ ticketId }: TicketMessagesProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetchMessages();
-    // Poll for new messages every 10 seconds
-    const interval = setInterval(fetchMessages, 10000);
-    return () => clearInterval(interval);
-  }, [ticketId]);
-
-  useEffect(() => {
     // Scroll to bottom when messages change
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
 
-  const fetchMessages = async (showLoader = false) => {
+  const fetchMessages = useCallback(async (showLoader = false) => {
     if (showLoader) setIsRefreshing(true);
     try {
       const response = await apiClient.getTicketMessages(ticketId);
@@ -60,7 +53,15 @@ export function TicketMessages({ ticketId }: TicketMessagesProps) {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, [ticketId]);
+
+  useEffect(() => {
+    void fetchMessages();
+    // Poll for new messages every 10 seconds
+    const interval = setInterval(() => void fetchMessages(), 10000);
+    return () => clearInterval(interval);
+  }, [fetchMessages]);
+
 
   const handleSendMessage = async () => {
     if (!user || !newMessage.trim()) return;

@@ -1,9 +1,28 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Bundled rather than loaded from a CDN: this is a desktop app that has to
+   render correctly offline, and a webfont request would flash a fallback on
+   every cold start. Only the weights actually used are imported.
+
+   IBM Plex is chosen deliberately — it was drawn for technical interfaces, its
+   German diacritics are well made, and its mono companion matches the sans
+   metrically, which matters because ticket numbers, timers and dates are all
+   set in tabular monospace next to sans labels. */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-sans/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans:
+    "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -40,9 +59,27 @@
   --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
   --color-sidebar-border: hsl(var(--sidebar-border));
   --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  /* Semantic tones for ticket status and priority. Separate from the accent so
+     "needs attention" never depends on brand colour. */
+  --color-tone-neutral: hsl(var(--tone-neutral));
+  --color-tone-neutral-soft: hsl(var(--tone-neutral-soft));
+  --color-tone-info: hsl(var(--tone-info));
+  --color-tone-info-soft: hsl(var(--tone-info-soft));
+  --color-tone-active: hsl(var(--tone-active));
+  --color-tone-active-soft: hsl(var(--tone-active-soft));
+  --color-tone-warning: hsl(var(--tone-warning));
+  --color-tone-warning-soft: hsl(var(--tone-warning-soft));
+  --color-tone-success: hsl(var(--tone-success));
+  --color-tone-success-soft: hsl(var(--tone-success-soft));
+  --color-tone-danger: hsl(var(--tone-danger));
+  --color-tone-danger-soft: hsl(var(--tone-danger-soft));
 }
 
 :root {
+  /* Height of the custom window titlebar. The sidebar is fixed-positioned
+     and would otherwise cover it, so it offsets by this. */
+  --titlebar-height: 2.25rem;
   --radius: 0.5rem;
   --background: 0 0% 100%;
   --foreground: 0 0% 3.9%;
@@ -76,6 +113,20 @@
   --sidebar-accent-foreground: 0 0% 9%;
   --sidebar-border: 0 0% 89.8%;
   --sidebar-ring: 0 0% 3.9%;
+
+  /* Semantic tones. Chosen for contrast against --background, not for brand. */
+  --tone-neutral: 220 9% 40%;
+  --tone-neutral-soft: 220 14% 94%;
+  --tone-info: 217 75% 40%;
+  --tone-info-soft: 214 95% 95%;
+  --tone-active: 174 72% 26%;
+  --tone-active-soft: 173 60% 94%;
+  --tone-warning: 32 90% 30%;
+  --tone-warning-soft: 40 96% 93%;
+  --tone-success: 152 62% 26%;
+  --tone-success-soft: 149 65% 94%;
+  --tone-danger: 0 68% 42%;
+  --tone-danger-soft: 0 90% 96%;
 }
 
 .dark {
@@ -111,6 +162,20 @@
   --sidebar-accent-foreground: 0 0% 98%;
   --sidebar-border: 0 0% 14.9%;
   --sidebar-ring: 0 0% 83.1%;
+
+  /* Lifted for legibility on the dark ground; softs become low-alpha grounds. */
+  --tone-neutral: 220 10% 70%;
+  --tone-neutral-soft: 220 12% 18%;
+  --tone-info: 213 92% 72%;
+  --tone-info-soft: 215 60% 17%;
+  --tone-active: 172 62% 58%;
+  --tone-active-soft: 174 55% 14%;
+  --tone-warning: 40 92% 66%;
+  --tone-warning-soft: 34 60% 15%;
+  --tone-success: 150 60% 60%;
+  --tone-success-soft: 150 50% 13%;
+  --tone-danger: 0 85% 72%;
+  --tone-danger-soft: 0 50% 17%;
 }
 
 @layer base {
@@ -118,7 +183,17 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
+
+    /* Carried over from the deleted App.css, which was Vite scaffolding. The
+       rest of that file styled bare `input`, `button`, `a` and `h1` elements
+       with hardcoded colours, overriding the shadcn components, and swapped
+       those colours on prefers-color-scheme — which fought this app's own
+       .dark class. Only the text rendering was worth keeping. */
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 

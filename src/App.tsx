@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import "./App.css";
+import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider, useTickets } from "./contexts/TicketsContext";
@@ -8,7 +8,7 @@ import { NotificationProvider } from "./contexts/NotificationContext";
 import { CustomLoginForm } from "./components/auth/CustomLoginForm";
 import { TicketAppSidebar } from "./components/TicketAppSidebar";
 import { Dashboard } from "./components/dashboard/Dashboard";
-import { TicketList } from "./components/tickets/TicketList";
+import { TicketBoard } from "./components/tickets/TicketBoard";
 import { TicketDetail } from "./components/tickets/TicketDetail";
 import { NewTicketForm } from "./components/tickets/NewTicketForm";
 import { Settings } from "./components/settings/Settings";
@@ -19,63 +19,44 @@ import { TicketWindow } from "./components/tickets/TicketWindow";
 import { UpdateNotification } from "./components/ui/UpdateNotification";
 import { DebugPanel } from "./components/debug/DebugPanel";
 import { Toaster } from "./components/ui/sonner";
-import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
-import { Separator } from "@/components/ui/separator";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-} from "@/components/ui/breadcrumb";
+import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
+import { PanelLeft } from "lucide-react";
 import { Ticket } from "./types/api";
-import { apiClient } from "./lib/api";
+import { getTicket } from "./lib/sync";
 import { WindowManager } from "./lib/windowManager";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { SyncIndicator } from "./components/SyncIndicator";
+import { Titlebar } from "./components/Titlebar";
+import { CommandPalette } from "./components/CommandPalette";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
-  const { setActiveTab, tickets, allTicketsForSearch, filterState } = useTickets();
+  const { setActiveTab, tickets } = useTickets();
   const [currentView, setCurrentView] = useState("dashboard");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
+  // Controlled so the titlebar can toggle it from outside the provider.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Check URL for ticket routing on mount and cleanup temp files
-  useEffect(() => {
-    const checkUrlForTicket = () => {
-      const hash = window.location.hash;
-      const ticketMatch = hash.match(/^#\/ticket\/(\d+)$/);
-
-      if (ticketMatch) {
-        const ticketId = parseInt(ticketMatch[1], 10);
-        loadTicketById(ticketId);
-        return;
-      }
-
-      // Default to dashboard if no specific route
-      setCurrentView("dashboard");
-      setSelectedTicket(null);
-    };
-
-    if (isAuthenticated) {
-      checkUrlForTicket();
-
-      // Clean up old temp files on app startup
-      WindowManager.cleanupOldTempFiles();
-    }
-  }, [isAuthenticated]);
-
-  // Debug panel keyboard shortcut (Ctrl+Shift+D)
+  // Global shortcuts: Ctrl/Cmd+K opens the palette, Ctrl+Shift+D the debug panel.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setShowPalette((open) => !open);
+        return;
+      }
       if (event.ctrlKey && event.shiftKey && event.key === 'D') {
         event.preventDefault();
-        setShowDebugPanel(!showDebugPanel);
+        setShowDebugPanel((open) => !open);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showDebugPanel]);
+  }, []);
 
   // Cleanup temp files on app shutdown
   useEffect(() => {
@@ -87,50 +68,18 @@ function AppContent() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  const loadTicketById = async (ticketId: number) => {
+  const loadTicketById = useCallback(async (ticketId: number) => {
     setIsLoadingTicket(true);
     try {
-      const response = await apiClient.getTicketById(ticketId);
-      if (response.result === 'success' && response.tickets) {
-        const rawTicket = response.tickets;
-        
-        const transformedTicket: Ticket = {
-          id: rawTicket.id,
-          description: rawTicket.description || '',
-          status: rawTicket.status?.name || '',
-          status_id: rawTicket.status_id || 0,
-          summary: rawTicket.summary || '',
-          ticketCreator: rawTicket.userone?.name || '',
-          ticketUser: rawTicket.ticketuser?.name || '',
-          ticketUserPhone: rawTicket.ticketuser?.phone || '',
-          ticketTerminatedUser: '',
-          attachments: [],
-          subject: rawTicket.servicedetail?.name || '',
-          priority: rawTicket.priority || '',
-          index: rawTicket.priority_index || 0,
-          my_ticket_id: rawTicket.my_ticket_id || 0,
-          location_id: rawTicket.location_id || 0,
-          company: {
-            id: rawTicket.companyone?.id || 0,
-            name: rawTicket.companyone?.name || '',
-            number: rawTicket.companyone?.number || '',
-            companyMail: rawTicket.companyone?.email || '',
-            companyPhone: rawTicket.companyone?.phone || '',
-            companyZip: rawTicket.companyone?.zip || '',
-            companyAdress: rawTicket.companyone?.address || '',
-          },
-          dyn_template_id: rawTicket.dyn_template_id || 0,
-          created_at: rawTicket.created_at || '',
-          ticket_start: '',
-          ticketMessagesCount: 0,
-          template_data: rawTicket.template_data || '',
-          pool_name: '',
-        };
-        
-        setSelectedTicket(transformedTicket);
+      // Served from the local store when the ticket has been synced, which is
+      // both instant and complete — the network fallback loses attachments,
+      // pool and message count because getTicketById loads fewer relations.
+      const ticket = await getTicket(ticketId);
+      if (ticket) {
+        setSelectedTicket(ticket);
         setCurrentView("tickets");
       } else {
-        console.error('Failed to load ticket:', response);
+        console.error('Ticket not found:', ticketId);
         // Fallback to dashboard if ticket not found
         setCurrentView("dashboard");
         setSelectedTicket(null);
@@ -143,7 +92,40 @@ function AppContent() {
     } finally {
       setIsLoadingTicket(false);
     }
-  };
+  }, []);
+
+  // Check URL for ticket routing on mount, and clean up old temp files.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const ticketMatch = window.location.hash.match(/^#\/ticket\/(\d+)$/);
+    if (ticketMatch) {
+      void loadTicketById(parseInt(ticketMatch[1], 10));
+    } else {
+      setCurrentView("dashboard");
+      setSelectedTicket(null);
+    }
+
+    WindowManager.cleanupOldTempFiles();
+  }, [isAuthenticated, loadTicketById]);
+
+  // A clicked notification raises this window and asks it to show a ticket.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void listen<number>('navigate://ticket', (event) => {
+      void loadTicketById(event.payload);
+    }).then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, [loadTicketById]);
 
   const handleViewChange = (view: string) => {
     setCurrentView(view);
@@ -155,25 +137,15 @@ function AppContent() {
   };
 
   const handleTicketSelect = (ticket: Ticket, preserveCurrentTab?: boolean) => {
-    // Only determine which tab this ticket belongs to if we're not preserving the current tab
+    // Pick the tab the ticket actually lives in.
+    //
+    // This used to branch on whether an "advanced search" had loaded a second,
+    // wider copy of the ticket data. The store makes every synced ticket
+    // available to the normal lists, so there is only one source to check.
     if (!preserveCurrentTab) {
-      // First check if we're using advanced filters and have expanded ticket data
-      let isMyTicket = false;
-      let isNewTicket = false;
-
-      if (filterState.customerFilter && allTicketsForSearch) {
-        // When using advanced filters, check the expanded ticket data
-        isMyTicket = allTicketsForSearch.my_tickets.some(t => t.id === ticket.id);
-        isNewTicket = allTicketsForSearch.new_tickets.some(t => t.id === ticket.id);
-      } else {
-        // For normal browsing, check the main ticket lists
-        isMyTicket = tickets.my_tickets.some(t => t.id === ticket.id);
-        isNewTicket = tickets.new_tickets.some(t => t.id === ticket.id);
-      }
-
-      if (isMyTicket) {
+      if (tickets.my_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('my');
-      } else if (isNewTicket) {
+      } else if (tickets.new_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('new');
       } else {
         setActiveTab('all');
@@ -193,16 +165,21 @@ function AppContent() {
     }
   };
 
+  // Every screen needs the titlebar: with decorations disabled there is no OS
+  // frame, so without it the window cannot be moved, minimised or closed.
   if (isLoading || isLoadingTicket) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center mx-auto animate-pulse">
-            <div className="w-4 h-4 bg-primary-foreground rounded" />
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <Titlebar title="Ticketbase" />
+        <div className="flex flex-1 items-center justify-center">
+          <div className="text-center space-y-4">
+            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center mx-auto animate-pulse">
+              <div className="w-4 h-4 bg-primary-foreground rounded" />
+            </div>
+            <p className="text-muted-foreground">
+              {isLoadingTicket ? "Loading ticket..." : "Loading..."}
+            </p>
           </div>
-          <p className="text-muted-foreground">
-            {isLoadingTicket ? "Loading ticket..." : "Loading..."}
-          </p>
         </div>
       </div>
     );
@@ -210,10 +187,13 @@ function AppContent() {
 
   if (!isAuthenticated) {
     return (
-      <>
-        <CustomLoginForm />
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <Titlebar title="Ticketbase" />
+        <div className="flex-1 overflow-auto">
+          <CustomLoginForm />
+        </div>
         <UpdateNotification />
-      </>
+      </div>
     );
   }
 
@@ -223,11 +203,11 @@ function AppContent() {
     switch (currentView) {
       case "dashboard": return "Dashboard";
       case "tickets": return "Tickets";
-      case "new-ticket": return "New Ticket";
-      case "settings": return "Settings";
-      case "today": return "Today's Schedule";
-      case "wiki": return "Knowledge Base";
-      case "reports": return "Reports";
+      case "new-ticket": return "Neues Ticket";
+      case "settings": return "Einstellungen";
+      case "today": return "Heute";
+      case "wiki": return "Wissensdatenbank";
+      case "reports": return "Berichte";
       default: return "Dashboard";
     }
   };
@@ -242,7 +222,7 @@ function AppContent() {
       case "dashboard":
         return <Dashboard onTicketSelect={handleTicketSelect} />;
       case "tickets":
-        return <TicketList onTicketSelect={handleTicketSelect} />;
+        return <TicketBoard onTicketSelect={handleTicketSelect} />;
       case "new-ticket":
         return <NewTicketForm />;
       case "settings":
@@ -259,33 +239,54 @@ function AppContent() {
   };
 
   return (
-    <SidebarProvider>
+    <div className="flex h-screen flex-col overflow-hidden">
+      {/* The sidebar toggle, current view and sync state live in the window
+          frame, which reclaims the ~48px header row they used to occupy. */}
+      <Titlebar
+        title="Ticketbase"
+        subtitle={getBreadcrumbTitle()}
+        leading={
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-label={sidebarOpen ? 'Navigation einklappen' : 'Navigation ausklappen'}
+            title={sidebarOpen ? 'Navigation einklappen' : 'Navigation ausklappen'}
+            className="inline-flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <PanelLeft className="h-3.5 w-3.5" />
+          </button>
+        }
+      >
+        <SyncIndicator />
+      </Titlebar>
+      <SidebarProvider className="min-h-0 flex-1" open={sidebarOpen} onOpenChange={setSidebarOpen}>
       <TicketAppSidebar currentView={currentView} onViewChange={handleViewChange} />
-      <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
-          <div className="flex items-center gap-2 px-4">
-            <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="mr-2 h-4" />
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{getBreadcrumbTitle()}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
-          </div>
-        </header>
-        <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-          {renderContent()}
+      <SidebarInset className="min-h-0 overflow-hidden">
+        {/* min-h-0 plus overflow-y-auto is what actually lets long pages scroll:
+            without it the flex child grows past the viewport and is clipped. */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <ErrorBoundary
+            label={selectedTicket ? `ticket #${selectedTicket.id}` : getBreadcrumbTitle().toLowerCase()}
+            resetKey={selectedTicket ? `ticket-${selectedTicket.id}` : currentView}
+          >
+            {renderContent()}
+          </ErrorBoundary>
         </div>
       </SidebarInset>
+      <CommandPalette
+        open={showPalette}
+        onOpenChange={setShowPalette}
+        onNavigate={handleViewChange}
+        onSelectTicket={(ticket) => handleTicketSelect(ticket)}
+      />
       <UpdateNotification />
       <DebugPanel
         isVisible={showDebugPanel && process.env.NODE_ENV === 'development'}
         onClose={() => setShowDebugPanel(false)}
       />
       <Toaster />
-    </SidebarProvider>
+      </SidebarProvider>
+    </div>
   );
 }
 

@@ -2,9 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { toast } from 'sonner';
 import { sendNotification, isPermissionGranted, requestPermission, onAction, registerActionTypes } from '@tauri-apps/plugin-notification';
 import { invoke } from '@tauri-apps/api/core';
-import { useAuth } from './AuthContext';
-import { useTickets } from './TicketsContext';
-import { Ticket } from '@/types/api';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getTicket, onSyncChanged, syncSetInterval } from '@/lib/sync';
 
 interface NotificationSettings {
   enableNewTicketNotifications: boolean;
@@ -26,9 +25,20 @@ const NotificationContext = createContext<NotificationContextType | undefined>(u
 
 const STORAGE_KEY = 'notification-settings';
 
+/**
+ * Only one window may announce a ticket. Every window mounts this provider, so
+ * without this guard each open ticket popup would fire its own toast and sound
+ * for the same ticket.
+ */
+function isMainWindow(): boolean {
+  try {
+    return getCurrentWindow().label === 'main';
+  } catch {
+    return true;
+  }
+}
+
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
-  const { tickets, lastUpdated } = useTickets();
   
   const [settings, setSettings] = useState<NotificationSettings>(() => {
     const defaults = {
@@ -52,19 +62,30 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     return defaults;
   });
 
-  const previousTicketsRef = useRef<{
-    new_tickets: Ticket[];
-    my_tickets: Ticket[];
-  }>({ new_tickets: [], my_tickets: [] });
-  
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const isInitialLoad = useRef(true);
+
+  // The sync subscription is bound once for the window's lifetime, so it reads
+  // the current settings through a ref rather than re-subscribing on each edit.
+  const settingsRef = useRef(settings);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
     // Dispatch custom event for same-window updates
     window.dispatchEvent(new Event('notification-settings-changed'));
   }, [settings]);
+
+  // The refresh interval now drives the Rust sync engine rather than a timer in
+  // each window. The engine enforces its own floor, because one pull is
+  // expensive server-side.
+  useEffect(() => {
+    if (!isMainWindow()) return;
+    void syncSetInterval(settings.ticketRefreshInterval).catch((error) => {
+      console.error('Failed to set sync interval:', error);
+    });
+  }, [settings.ticketRefreshInterval]);
 
   useEffect(() => {
     // Create audio element for notifications using the MP3 file
@@ -106,11 +127,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           }],
         }]);
 
-        // Listen for notification clicks — open the related ticket window
+        // Clicking a notification brings the app forward and shows the ticket.
+        //
+        // This used to spawn a new ticket window, which left the user with a
+        // window to close and did nothing to raise the app if it was minimised
+        // or behind something. show_ticket raises an already-open window for
+        // that ticket if there is one, and otherwise raises the main window and
+        // navigates it.
         unlistenAction = await onAction((action: any) => {
-          const ticketId = action.notification?.extra?.ticketId;
-          if (ticketId) {
-            invoke('open_ticket_window', { ticketId: parseInt(ticketId) }).catch(console.error);
+          const raw = action.notification?.extra?.ticketId;
+          const ticketId = typeof raw === 'string' ? parseInt(raw, 10) : Number(raw);
+          if (Number.isFinite(ticketId) && ticketId > 0) {
+            invoke('show_ticket', { ticketId }).catch(console.error);
           }
         });
       } catch (error) {
@@ -176,96 +204,81 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }
   };
 
-  // Monitor for new tickets and assignments
+  // Announce genuinely new tickets.
+  //
+  // Change detection lives in the Rust sync engine, which sees each pull once,
+  // so a ticket is announced once no matter how many windows are open. This
+  // used to diff the ticket lists inside every window's provider — five open
+  // ticket windows meant five toasts and five sounds for the same ticket.
+  //
+  // The engine also suppresses the first sync after sign-in, so signing in does
+  // not announce the entire existing backlog.
   useEffect(() => {
-    if (isInitialLoad.current || !lastUpdated) {
-      isInitialLoad.current = false;
-      previousTicketsRef.current = {
-        new_tickets: tickets.new_tickets,
-        my_tickets: tickets.my_tickets,
-      };
-      return;
-    }
+    if (!isMainWindow()) return;
 
-    const previousTickets = previousTicketsRef.current;
-    const currentNewTickets = tickets.new_tickets;
-    const currentMyTickets = tickets.my_tickets;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
 
-    // Check for new tickets in pool
-    if (settings.enableNewTicketNotifications) {
-      const newTicketsAdded = currentNewTickets.filter(ticket =>
-        !previousTickets.new_tickets.some(prev => prev.id === ticket.id)
-      );
+    const describe = async (ids: number[], assigned: boolean) => {
+      if (ids.length === 0) return;
 
-      if (newTicketsAdded.length > 0) {
-        const title = newTicketsAdded.length === 1
-          ? 'New Ticket Available'
-          : `${newTicketsAdded.length} New Tickets Available`;
+      const title = ids.length === 1
+        ? (assigned ? 'New Ticket Assigned' : 'New Ticket Available')
+        : `${ids.length} ${assigned ? 'New Tickets Assigned' : 'New Tickets Available'}`;
 
-        let message: string;
-        let ticketId: number | undefined;
+      let message: string;
+      let ticketId: number | undefined;
 
-        if (newTicketsAdded.length === 1) {
-          const t = newTicketsAdded[0];
-          const parts = [
-            `#${t.id}`,
-            t.subject && `[${t.subject}]`,
-            t.priority && `Priority: ${t.priority}`,
-            t.company?.name && `Customer: ${t.company.name}`,
-            t.summary,
-          ].filter(Boolean);
-          message = parts.join(' · ');
-          ticketId = t.id;
-        } else {
-          message = `${newTicketsAdded.length} new tickets are now available in your pool`;
-        }
-
-        showNotification(title, message, ticketId);
-        playSound();
+      if (ids.length === 1) {
+        ticketId = ids[0];
+        const t = await getTicket(ticketId).catch(() => null);
+        message = t
+          ? [
+              `#${t.id}`,
+              t.subject && `[${t.subject}]`,
+              t.priority && `Priority: ${t.priority}`,
+              t.company?.name && `Customer: ${t.company.name}`,
+              assigned ? 'has been assigned to you' : t.summary,
+            ].filter(Boolean).join(' · ')
+          : `Ticket #${ticketId}`;
+      } else {
+        message = assigned
+          ? `${ids.length} tickets have been assigned to you`
+          : `${ids.length} new tickets are now available in your pool`;
       }
-    }
 
-    // Check for newly assigned tickets
-    if (settings.enableAssignedTicketNotifications && user) {
-      const newAssignments = currentMyTickets.filter(ticket =>
-        !previousTickets.my_tickets.some(prev => prev.id === ticket.id) &&
-        ticket.my_ticket_id === user.id
-      );
-
-      if (newAssignments.length > 0) {
-        const title = newAssignments.length === 1
-          ? 'New Ticket Assigned'
-          : `${newAssignments.length} New Tickets Assigned`;
-
-        let message: string;
-        let ticketId: number | undefined;
-
-        if (newAssignments.length === 1) {
-          const t = newAssignments[0];
-          const parts = [
-            `#${t.id}`,
-            t.subject && `[${t.subject}]`,
-            t.priority && `Priority: ${t.priority}`,
-            t.company?.name && `Customer: ${t.company.name}`,
-            'has been assigned to you',
-          ].filter(Boolean);
-          message = parts.join(' · ');
-          ticketId = t.id;
-        } else {
-          message = `${newAssignments.length} tickets have been assigned to you`;
-        }
-
-        showNotification(title, message, ticketId);
-        playSound();
-      }
-    }
-
-    // Update previous tickets reference
-    previousTicketsRef.current = {
-      new_tickets: currentNewTickets,
-      my_tickets: currentMyTickets,
+      showNotification(title, message, ticketId);
+      playSound();
     };
-  }, [tickets, lastUpdated, settings, user]);
+
+    const subscribe = async () => {
+      const off = await onSyncChanged(async (change) => {
+        if (settingsRef.current.enableNewTicketNotifications) {
+          await describe(change.newlyInPool, false);
+        }
+        if (settingsRef.current.enableAssignedTicketNotifications) {
+          await describe(change.newlyAssigned, true);
+        }
+      });
+
+      if (disposed) {
+        off();
+        return;
+      }
+      unlisten = off;
+    };
+
+    void subscribe();
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+    // showNotification and playSound read the latest settings through a ref, so
+    // this subscribes once for the window's lifetime rather than re-binding on
+    // every settings change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const requestNotificationPermission = async (): Promise<boolean> => {
     try {

@@ -1,11 +1,14 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Search, Book, FileText, Loader2, ExternalLink } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, ArrowLeft, BookOpen, FolderTree, RefreshCw, Search, X } from 'lucide-react';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/PageHeader';
 import { apiClient } from '@/lib/api';
 import { cache } from '@/lib/cache';
+import { parseTicketDate } from '@/lib/ticketDate';
 
 interface WikiArticle {
   id: number;
@@ -13,261 +16,288 @@ interface WikiArticle {
   content: string;
   category: string;
   folder: string;
-  writer?: {
-    name: string;
-    email: string;
-  };
+  writer?: { name: string; email: string };
   created_at: string;
   updated_at: string;
 }
 
+const CACHE_KEY = 'wiki_articles';
+const CACHE_TTL = 15 * 60 * 1000;
+
+/**
+ * Knowledge base.
+ *
+ * Read-only: getWikiData is the only wiki endpoint the API exposes, so articles
+ * cannot be created or edited from here — that lives in the web UI.
+ *
+ * The whole set is fetched once and filtered locally, which is fine because it
+ * is small and rarely changes; the cache keeps it off the network between
+ * visits.
+ */
 export function WikiSearch() {
   const [articles, setArticles] = useState<WikiArticle[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  const [selected, setSelected] = useState<WikiArticle | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedArticle, setSelectedArticle] = useState<WikiArticle | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchWikiData();
-  }, []);
-
-  // Debounced search query update
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
-    }, 300);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [searchQuery]);
-
-  // Memoized filtered articles
-  const filteredArticles = useMemo(() => {
-    if (debouncedQuery.trim() === '') {
-      return articles;
-    }
-    const query = debouncedQuery.toLowerCase();
-    return articles.filter(
-      article =>
-        article.title.toLowerCase().includes(query) ||
-        article.content.toLowerCase().includes(query) ||
-        article.category.toLowerCase().includes(query) ||
-        article.folder.toLowerCase().includes(query)
-    );
-  }, [debouncedQuery, articles]);
+    const timer = setTimeout(() => setDebounced(query), 220);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   const fetchWikiData = useCallback(async (forceRefresh = false) => {
-    const cacheKey = 'wiki_articles';
-
-    // Try to get from cache first
     if (!forceRefresh) {
-      const cachedData = cache.get<WikiArticle[]>(cacheKey);
-      if (cachedData) {
-        setArticles(cachedData);
+      const cached = cache.get<WikiArticle[]>(CACHE_KEY);
+      if (cached) {
+        setArticles(cached);
         setIsLoading(false);
         return;
       }
     }
 
     setIsLoading(true);
+    setError(null);
     try {
       const response = await apiClient.getWikiData();
-      if (response.status === 'success' && response.wikiData) {
-        // Flatten the nested structure: categories -> folders -> articles
-        const flattenedArticles: WikiArticle[] = [];
-
-        response.wikiData.forEach((category: any) => {
-          const categoryName = category.name || 'Uncategorized';
-
-          if (category.folder && Array.isArray(category.folder)) {
-            category.folder.forEach((folder: any) => {
-              const folderName = folder.name || 'General';
-
-              if (folder.article && Array.isArray(folder.article)) {
-                folder.article.forEach((article: any) => {
-                  flattenedArticles.push({
-                    id: article.id,
-                    title: article.name || 'Untitled',
-                    content: article.article || '',
-                    category: categoryName,
-                    folder: folderName,
-                    writer: article.writer,
-                    created_at: article.created_at || '',
-                    updated_at: article.updated_at || '',
-                  });
-                });
-              }
-            });
-          }
-        });
-
-        // Cache the response for 10 minutes
-        cache.set(cacheKey, flattenedArticles, 10 * 60 * 1000);
-
-        setArticles(flattenedArticles);
-      }
-    } catch (error) {
-      console.error('Failed to fetch wiki data:', error);
+      const data = (response.wikiData ?? []) as WikiArticle[];
+      setArticles(data);
+      cache.set(CACHE_KEY, data, CACHE_TTL);
+    } catch (err) {
+      console.error('Failed to load the knowledge base:', err);
+      setError('Die Wissensdatenbank konnte nicht geladen werden.');
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const highlightText = useCallback((text: string, query: string) => {
-    if (!query) return text;
+  useEffect(() => {
+    void fetchWikiData();
+  }, [fetchWikiData]);
 
-    const parts = text.split(new RegExp(`(${query})`, 'gi'));
-    return parts.map((part, index) =>
-      part.toLowerCase() === query.toLowerCase() ? (
-        <mark key={index} className="bg-yellow-200 dark:bg-yellow-800">
-          {part}
-        </mark>
-      ) : (
-        part
-      )
-    );
-  }, []);
+  const folders = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const article of articles) {
+      const folder = article.folder?.trim() || 'Ohne Ordner';
+      counts.set(folder, (counts.get(folder) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [articles]);
 
-  const formatDate = useCallback((dateString: string) => {
-    return new Date(dateString).toLocaleDateString('de-DE', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
+  const results = useMemo(() => {
+    const needle = debounced.trim().toLowerCase();
+    return articles.filter((article) => {
+      const folder = article.folder?.trim() || 'Ohne Ordner';
+      if (activeFolder && folder !== activeFolder) return false;
+      if (!needle) return true;
+
+      return [article.title, article.content, article.category, article.folder]
+        .filter(Boolean)
+        .some((field) => field.toLowerCase().includes(needle));
     });
-  }, []);
+  }, [articles, debounced, activeFolder]);
+
+  if (selected) {
+    return <ArticleView article={selected} onBack={() => setSelected(null)} />;
+  }
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-3">
-            <Book className="h-8 w-8" />
-            Knowledge Base
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Search for solutions, documentation, and guides
-          </p>
-        </div>
-        <Button variant="outline" onClick={() => fetchWikiData(true)}>
-          <Search className="h-4 w-4 mr-2" />
-          Refresh
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <PageHeader
+        title="Wissensdatenbank"
+        description={`${articles.length} Artikel — nur lesend, Bearbeiten erfolgt im Web-Interface.`}
+        icon={BookOpen}
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void fetchWikiData(true)}
+          disabled={isLoading}
+          className="h-8 gap-1.5 text-xs"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          Aktualisieren
         </Button>
+      </PageHeader>
+
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Artikel durchsuchen…"
+          className="h-9 pl-8 pr-8 text-xs"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            aria-label="Suche leeren"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Search Articles</CardTitle>
-          <CardDescription>
-            Find answers to common questions and technical documentation
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="relative">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by title, content, category, or folder..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
+      {folders.length > 1 && (
+        <div className="flex flex-wrap gap-1.5">
+          <FolderChip
+            label="Alle"
+            count={articles.length}
+            active={activeFolder === null}
+            onClick={() => setActiveFolder(null)}
+          />
+          {folders.map(([folder, count]) => (
+            <FolderChip
+              key={folder}
+              label={folder}
+              count={count}
+              active={activeFolder === folder}
+              onClick={() => setActiveFolder(activeFolder === folder ? null : folder)}
             />
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-tone-danger-soft px-3 py-2 text-xs text-tone-danger">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">{error}</span>
+          <button type="button" onClick={() => void fetchWikiData(true)} className="underline">
+            Erneut versuchen
+          </button>
+        </div>
+      )}
+
+      <Card className="min-h-0 flex-1 overflow-auto py-0">
+        {isLoading ? (
+          <div className="divide-y">
+            {Array.from({ length: 8 }, (_, i) => (
+              <div key={i} className="animate-pulse space-y-1.5 px-3 py-2.5">
+                <div className="h-3 w-1/3 rounded bg-muted" />
+                <div className="h-2 w-2/3 rounded bg-muted" />
+              </div>
+            ))}
           </div>
-        </CardContent>
+        ) : results.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 px-3 py-12 text-center">
+            <FolderTree className="h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">Keine Artikel gefunden</p>
+            <p className="text-xs text-muted-foreground">
+              {debounced ? 'Andere Suchbegriffe versuchen.' : 'Die Wissensdatenbank ist leer.'}
+            </p>
+          </div>
+        ) : (
+          <ul className="divide-y">
+            {results.map((article) => (
+              <li key={article.id}>
+                <button
+                  type="button"
+                  onClick={() => setSelected(article)}
+                  className="w-full px-3 py-2.5 text-left hover:bg-accent/50 focus:bg-accent/50 focus:outline-none"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{article.title}</span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {excerpt(article.content, debounced)}
+                      </span>
+                    </span>
+                    {article.folder && (
+                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                        {article.folder}
+                      </Badge>
+                    )}
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
 
-      {isLoading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      ) : selectedArticle ? (
-        <Card>
-          <CardHeader>
-            <div className="flex items-start justify-between">
-              <div className="space-y-2">
-                <CardTitle className="text-2xl">{selectedArticle.title}</CardTitle>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant="secondary">{selectedArticle.category}</Badge>
-                  <Badge variant="outline">{selectedArticle.folder}</Badge>
-                  {selectedArticle.writer && (
-                    <span className="text-xs text-muted-foreground">
-                      by {selectedArticle.writer.name}
-                    </span>
-                  )}
-                  <span className="text-xs text-muted-foreground">
-                    Updated: {formatDate(selectedArticle.updated_at)}
-                  </span>
-                </div>
-              </div>
-              <Button variant="outline" size="sm" onClick={() => setSelectedArticle(null)}>
-                Back to Search
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div
-              className="prose dark:prose-invert max-w-none"
-              dangerouslySetInnerHTML={{ __html: selectedArticle.content }}
-            />
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4">
-          {filteredArticles.length === 0 ? (
-            <Card>
-              <CardContent className="p-12 text-center">
-                <Book className="h-16 w-16 mx-auto mb-4 text-muted-foreground/20" />
-                <h3 className="text-lg font-medium mb-2">No articles found</h3>
-                <p className="text-muted-foreground">
-                  {searchQuery
-                    ? `No results matching "${searchQuery}"`
-                    : 'No wiki articles available'}
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            filteredArticles.map((article) => (
-              <Card
-                key={article.id}
-                className="hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => setSelectedArticle(article)}
-              >
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 space-y-2">
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        <FileText className="h-5 w-5" />
-                        {highlightText(article.title, searchQuery)}
-                      </CardTitle>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge variant="secondary">{article.category}</Badge>
-                        <Badge variant="outline" className="text-xs">
-                          {article.folder}
-                        </Badge>
-                        {article.writer && (
-                          <span className="text-xs text-muted-foreground">
-                            by {article.writer.name}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />
-                  </div>
-                  <CardDescription className="line-clamp-2 mt-2">
-                    {article.content.replace(/<[^>]*>/g, '').substring(0, 150)}...
-                  </CardDescription>
-                </CardHeader>
-              </Card>
-            ))
-          )}
-        </div>
-      )}
-
-      {!selectedArticle && filteredArticles.length > 0 && (
-        <div className="text-center text-sm text-muted-foreground">
-          Showing {filteredArticles.length} of {articles.length} articles
-        </div>
-      )}
+      <p className="text-[11px] text-muted-foreground">
+        {results.length} von {articles.length} Artikeln
+      </p>
     </div>
   );
+}
+
+function FolderChip({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs transition-colors',
+        active ? 'bg-foreground text-background' : 'bg-secondary hover:bg-accent',
+      ].join(' ')}
+    >
+      {label}
+      <span className="font-mono text-[10px] tabular-nums opacity-70">{count}</span>
+    </button>
+  );
+}
+
+function ArticleView({ article, onBack }: { article: WikiArticle; onBack: () => void }) {
+  const updated = parseTicketDate(article.updated_at);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <div className="flex items-start gap-3">
+        <Button variant="outline" size="icon" onClick={onBack} aria-label="Zurück zur Übersicht">
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg font-semibold">{article.title}</h1>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            {article.folder && <span>{article.folder}</span>}
+            {article.category && <span>· {article.category}</span>}
+            {article.writer?.name && <span>· {article.writer.name}</span>}
+            {updated && <span>· {updated.toLocaleDateString()}</span>}
+          </p>
+        </div>
+      </div>
+
+      <Card className="min-h-0 flex-1 overflow-auto p-5">
+        {/* Article bodies are HTML from the web editor. Rendering them as text
+            keeps untrusted markup out of the app; the trade-off is that
+            formatting is lost, which is preferable to injecting it. */}
+        <div className="prose-sm max-w-[70ch] whitespace-pre-wrap text-sm leading-relaxed">
+          {stripHtml(article.content)}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/** First match in context, so search results show why they matched. */
+function excerpt(content: string, needle: string): string {
+  const text = stripHtml(content).replace(/\s+/g, ' ').trim();
+  if (!needle) return text.slice(0, 140);
+
+  const at = text.toLowerCase().indexOf(needle.trim().toLowerCase());
+  if (at < 0) return text.slice(0, 140);
+
+  const from = Math.max(0, at - 40);
+  return `${from > 0 ? '…' : ''}${text.slice(from, from + 140)}`;
+}
+
+function stripHtml(html: string): string {
+  const el = document.createElement('div');
+  el.innerHTML = html ?? '';
+  return el.textContent || el.innerText || '';
 }

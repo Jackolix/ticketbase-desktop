@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local copy of the Laravel backend (read-only reference, not part of this app)
+ticketsystem-backend/

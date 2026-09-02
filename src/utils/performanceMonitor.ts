@@ -1,4 +1,14 @@
 // Performance monitoring utility
+//
+// Every console call here is gated behind DEV. This module is exercised on each
+// ticket fetch and on each TicketList render, so ungated logging meant ~150
+// console calls shipping in — and running in — release builds.
+const DEV = import.meta.env.DEV;
+
+const devLog = (...args: unknown[]) => { if (DEV) console.log(...args); };
+const devWarn = (...args: unknown[]) => { if (DEV) console.warn(...args); };
+const devGroup = (...args: unknown[]) => { if (DEV) console.group(...args); };
+const devGroupEnd = () => { if (DEV) console.groupEnd(); };
 class PerformanceMonitor {
   private static instance: PerformanceMonitor;
   private metrics: Map<string, { start: number; end?: number; duration?: number }> = new Map();
@@ -8,7 +18,7 @@ class PerformanceMonitor {
 
   private constructor() {
     // Take memory snapshots every 30 seconds in development
-    if (process.env.NODE_ENV === 'development') {
+    if (DEV) {
       setInterval(() => {
         this.takeMemorySnapshot();
       }, 30000);
@@ -25,13 +35,13 @@ class PerformanceMonitor {
   // Performance timing
   startTimer(label: string): void {
     this.metrics.set(label, { start: performance.now() });
-    console.log(`⏱️ [PERF] Started: ${label}`);
+    devLog(`⏱️ [PERF] Started: ${label}`);
   }
 
   endTimer(label: string): number {
     const metric = this.metrics.get(label);
     if (!metric) {
-      console.warn(`⚠️ [PERF] Timer '${label}' not found`);
+      devWarn(`⚠️ [PERF] Timer '${label}' not found`);
       return 0;
     }
 
@@ -42,7 +52,7 @@ class PerformanceMonitor {
     metric.duration = duration;
 
     const color = duration > 1000 ? '🔴' : duration > 500 ? '🟡' : '🟢';
-    console.log(`${color} [PERF] Completed: ${label} - ${duration.toFixed(2)}ms`);
+    devLog(`${color} [PERF] Completed: ${label} - ${duration.toFixed(2)}ms`);
 
     return duration;
   }
@@ -54,7 +64,7 @@ class PerformanceMonitor {
     if (size !== undefined) stats.size = size;
     this.cacheStats.set(cacheKey, stats);
 
-    console.log(`💾 [CACHE HIT] ${cacheKey} - Hits: ${stats.hits}, Misses: ${stats.misses}, Hit Rate: ${(stats.hits / (stats.hits + stats.misses) * 100).toFixed(1)}%`);
+    devLog(`💾 [CACHE HIT] ${cacheKey} - Hits: ${stats.hits}, Misses: ${stats.misses}, Hit Rate: ${(stats.hits / (stats.hits + stats.misses) * 100).toFixed(1)}%`);
   }
 
   recordCacheMiss(cacheKey: string): void {
@@ -62,7 +72,7 @@ class PerformanceMonitor {
     stats.misses++;
     this.cacheStats.set(cacheKey, stats);
 
-    console.log(`❌ [CACHE MISS] ${cacheKey} - Hits: ${stats.hits}, Misses: ${stats.misses}, Hit Rate: ${(stats.hits / (stats.hits + stats.misses) * 100).toFixed(1)}%`);
+    devLog(`❌ [CACHE MISS] ${cacheKey} - Hits: ${stats.hits}, Misses: ${stats.misses}, Hit Rate: ${(stats.hits / (stats.hits + stats.misses) * 100).toFixed(1)}%`);
   }
 
   recordCacheSize(cacheKey: string, size: number, itemCount?: number): void {
@@ -72,7 +82,7 @@ class PerformanceMonitor {
 
     const sizeStr = this.formatBytes(size);
     const itemStr = itemCount !== undefined ? `, ${itemCount} items` : '';
-    console.log(`📊 [CACHE SIZE] ${cacheKey} - ${sizeStr}${itemStr}`);
+    devLog(`📊 [CACHE SIZE] ${cacheKey} - ${sizeStr}${itemStr}`);
   }
 
   // Render tracking
@@ -81,7 +91,7 @@ class PerformanceMonitor {
     this.renderCounts.set(componentName, count + 1);
 
     if (count > 0 && count % 5 === 0) {
-      console.log(`🔄 [RENDER] ${componentName} - ${count + 1} renders`);
+      devLog(`🔄 [RENDER] ${componentName} - ${count + 1} renders`);
     }
   }
 
@@ -102,7 +112,7 @@ class PerformanceMonitor {
         this.memorySnapshots.shift();
       }
 
-      console.log(`🧠 [MEMORY] Used: ${this.formatBytes(snapshot.usedJSHeapSize)}, Total: ${this.formatBytes(snapshot.totalJSHeapSize)}`);
+      devLog(`🧠 [MEMORY] Used: ${this.formatBytes(snapshot.usedJSHeapSize)}, Total: ${this.formatBytes(snapshot.totalJSHeapSize)}`);
     }
   }
 
@@ -152,26 +162,26 @@ class PerformanceMonitor {
     this.cacheStats.clear();
     this.renderCounts.clear();
     this.memorySnapshots = [];
-    console.log('🧹 [PERF] All performance stats cleared');
+    devLog('🧹 [PERF] All performance stats cleared');
   }
 
   // Log summary
   logSummary(): void {
-    console.group('📈 Performance Summary');
+    devGroup('📈 Performance Summary');
 
-    console.log('⏱️ Timings:', this.metrics);
-    console.log('💾 Cache Stats:', this.getCacheSummary());
-    console.log('🔄 Render Counts:', this.renderCounts);
+    devLog('⏱️ Timings:', this.metrics);
+    devLog('💾 Cache Stats:', this.getCacheSummary());
+    devLog('🔄 Render Counts:', this.renderCounts);
 
     if (this.memorySnapshots.length > 0) {
       const latest = this.memorySnapshots[this.memorySnapshots.length - 1];
-      console.log('🧠 Latest Memory:', {
+      devLog('🧠 Latest Memory:', {
         used: this.formatBytes(latest.usedJSHeapSize),
         total: this.formatBytes(latest.totalJSHeapSize)
       });
     }
 
-    console.groupEnd();
+    devGroupEnd();
   }
 }
 
@@ -179,7 +189,7 @@ export const performanceMonitor = PerformanceMonitor.getInstance();
 
 // Hook for React components
 export const usePerformanceMonitor = (componentName: string) => {
-  if (process.env.NODE_ENV === 'development') {
+  if (DEV) {
     performanceMonitor.recordRender(componentName);
   }
 

@@ -10,7 +10,7 @@ import {
   Settings,
   Sun,
   Moon,
-  Play,
+  Loader2,
   LogOut,
   Book,
 } from "lucide-react"
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/contexts/AuthContext"
+import { useAvailability } from "@/hooks/useAvailability"
 import { useTheme } from "@/contexts/ThemeContext"
 
 interface TicketAppSidebarProps extends React.ComponentProps<typeof Sidebar> {
@@ -39,6 +40,7 @@ interface TicketAppSidebarProps extends React.ComponentProps<typeof Sidebar> {
 
 export function TicketAppSidebar({ currentView, onViewChange, ...props }: TicketAppSidebarProps) {
   const { user, logout } = useAuth();
+  const { isAvailable, isBusy, toggle: toggleAvailability } = useAvailability();
   const { theme, toggleTheme } = useTheme();
 
   const navigationItems = [
@@ -200,16 +202,36 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
               </SidebarMenuItem>
               
 
+              {/* Availability for today. This was a dead <a href="#"> that did
+                  nothing; it now drives changeUserStatus, which decides whether
+                  tickets get assigned to you. */}
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  asChild
-                  tooltip="Start Work Session"
+                  tooltip={isAvailable ? 'Als nicht verfügbar markieren' : 'Als verfügbar markieren'}
                   className="h-10 px-3"
+                  onClick={() => void toggleAvailability()}
+                  disabled={isAvailable === null || isBusy}
                 >
-                  <a href="#" className="flex items-center gap-3 w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
-                    <Play className="h-4 w-4 shrink-0" />
-                    <span className="font-medium group-data-[collapsible=icon]:sr-only">Start Work</span>
-                  </a>
+                  <span className="flex w-full items-center gap-3 group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
+                    {isBusy ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                    ) : (
+                      <span
+                        aria-hidden
+                        className={[
+                          'h-2.5 w-2.5 shrink-0 rounded-full',
+                          isAvailable ? 'bg-tone-success' : 'bg-muted-foreground/40',
+                        ].join(' ')}
+                      />
+                    )}
+                    <span className="font-medium group-data-[collapsible=icon]:sr-only">
+                      {isAvailable === null
+                        ? 'Status…'
+                        : isAvailable
+                          ? 'Verfügbar'
+                          : 'Nicht verfügbar'}
+                    </span>
+                  </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>

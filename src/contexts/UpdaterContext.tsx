@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { check, Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
@@ -48,9 +48,18 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   const [lastCheckTime, setLastCheckTime] = useState<Date | null>(null);
   const [debugInfo, setDebugInfo] = useState('');
 
-  // Refs to access latest state in event handlers
+  // Refs to access latest state in event handlers and long-lived intervals.
+  //
+  // The periodic check runs on an interval created once, so anything it reads
+  // from state directly would be frozen at its first-render value. That was a
+  // live bug: `availableUpdate` was permanently null inside the closure, so the
+  // version comparison always passed and the same update was re-downloaded
+  // every 30 minutes.
   const updateRef = useRef<Update | null>(null);
   const isUpdateDownloadedRef = useRef(false);
+  const isCheckingRef = useRef(false);
+  const isDownloadingRef = useRef(false);
+  const isInstallingRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -60,6 +69,18 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   useEffect(() => {
     isUpdateDownloadedRef.current = isUpdateDownloaded;
   }, [isUpdateDownloaded]);
+
+  useEffect(() => {
+    isCheckingRef.current = isCheckingForUpdate;
+  }, [isCheckingForUpdate]);
+
+  useEffect(() => {
+    isDownloadingRef.current = isDownloading;
+  }, [isDownloading]);
+
+  useEffect(() => {
+    isInstallingRef.current = isInstalling;
+  }, [isInstalling]);
 
   // Get current app version on mount
   useEffect(() => {
@@ -77,8 +98,8 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   }, []);
 
   // Auto-download update in background
-  const autoDownloadUpdate = async (update: Update) => {
-    if (isDownloading || isUpdateDownloaded) return;
+  const autoDownloadUpdate = useCallback(async (update: Update) => {
+    if (isDownloadingRef.current || isUpdateDownloadedRef.current) return;
 
     try {
       console.log('Auto-downloading update in background...');
@@ -115,19 +136,20 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
     } finally {
       setIsDownloading(false);
     }
-  };
+  }, []);
 
   // Check for updates periodically (every 30 minutes)
   useEffect(() => {
     const checkForUpdates = async () => {
-      if (isCheckingForUpdate || isInstalling) return;
+      if (isCheckingRef.current || isInstallingRef.current) return;
 
       try {
         setIsCheckingForUpdate(true);
         setLastError(null);
         const update = await check();
 
-        if (update && (!availableUpdate || update.version !== availableUpdate.version)) {
+        const known = updateRef.current;
+        if (update && (!known || update.version !== known.version)) {
           console.log('Update available:', update.version);
           setAvailableUpdate(update);
           setIsUpdateDownloaded(false);
@@ -160,51 +182,59 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
       const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
       return () => clearInterval(interval);
     }
-  }, []); // Remove dependencies to prevent infinite loops
+  }, [autoDownloadUpdate]);
 
-  // Install update on window close
+  // Install a downloaded update when the app is closed.
+  //
+  // This only ever runs on the main window. It used to be registered on every
+  // window, so closing a ticket popup would preventDefault() and try to install
+  // the whole application — and if that failed, the window could never be
+  // closed at all.
   useEffect(() => {
     const isDevelopment = import.meta.env.DEV;
     if (isDevelopment) return;
 
+    const appWindow = getCurrentWindow();
+    if (appWindow.label !== 'main') return;
+
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     const setupCloseHandler = async () => {
-      const appWindow = getCurrentWindow();
+      const handler = await appWindow.onCloseRequested(async (event) => {
+        if (!isUpdateDownloadedRef.current || !updateRef.current) return;
 
-      unlisten = await appWindow.onCloseRequested(async (event) => {
-        if (isUpdateDownloadedRef.current && updateRef.current) {
-          // Prevent the window from closing immediately
-          event.preventDefault();
+        // Hold the window open just long enough to swap the binary.
+        event.preventDefault();
+        console.log('Installing update before closing...');
 
-          console.log('Installing update before closing...');
-
-          try {
-            // Timeout after 15 seconds to prevent hanging on close
-            await Promise.race([
-              updateRef.current.install(),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Install timeout after 15s')), 15000)
-              ),
-            ]);
-            // Relaunch with the new version
-            await relaunch();
-          } catch (error) {
-            console.error('Failed to install update on close:', error);
-            // If install fails or times out, force-close the window
-            try {
-              await appWindow.destroy();
-            } catch {
-              window.close();
-            }
-          }
+        try {
+          await Promise.race([
+            updateRef.current.install(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Install timeout after 15s')), 15000)
+            ),
+          ]);
+          await relaunch();
+        } catch (error) {
+          console.error('Failed to install update on close:', error);
+          // The user asked to close. Honour that regardless of the update:
+          // destroy() bypasses this same handler, so it cannot loop.
+          await appWindow.destroy();
         }
       });
+
+      if (cancelled) {
+        handler();
+        return;
+      }
+      unlisten = handler;
     };
 
     setupCloseHandler();
 
     return () => {
+      cancelled = true;
       if (unlisten) {
         unlisten();
       }

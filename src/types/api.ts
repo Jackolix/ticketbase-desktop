@@ -48,9 +48,15 @@ export interface Ticket {
   ticketCreator: string;
   ticketUser: string;
   ticketUserPhone: string;
-  playStatus?: string;
+  /** Raw player state from the backend: 1 play, 2 pause, 3 resume, 4 stop. */
+  playStatus: number | null;
   ticketTerminatedUser: string;
-  attachments: (string | { attachment?: string; filename?: string; path?: string })[];
+  /**
+   * Filenames only. The sync core normalises the backend's two shapes (a list
+   * of filenames from getTickets, a raw JSON column from getTicketById) into
+   * one, so this is no longer a union that callers have to narrow.
+   */
+  attachments: string[];
   subject: string;
   priority: string;
   index: number;
@@ -82,7 +88,13 @@ export interface TicketHistory {
   updated_at: string;
   service_start: number;
   service_end: number;
+  /**
+   * Billed time in MINUTES, rounded up to the customer's billing block
+   * (15 minutes by default) — see APITicketPlayerController::calculateTotalTime.
+   */
   total_time: number;
+  /** Time actually measured by the timer, in SECONDS, before rounding. */
+  raw_time?: number;
   user: User;
   status_name: string;
 }
@@ -115,6 +127,8 @@ export interface ApiResponse<T = any> {
   ticket_data?: TicketHistory[];
   check_list?: TodoItem[];
   playerStatus?: PlayerStatus;
+  /** getUserStatus and changeUserStatus return this at the top level, not under data. */
+  activity?: UserStatus;
   users?: User[];
   messages?: any[];
   todayTickets?: any[];

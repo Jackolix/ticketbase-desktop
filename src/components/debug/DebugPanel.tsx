@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { performanceMonitor } from '@/utils/performanceMonitor';
 import { useTickets } from '@/contexts/TicketsContext';
+import { parseSearch } from '@/lib/searchQuery';
 import {
   Activity,
   Database,
@@ -25,7 +26,7 @@ interface DebugPanelProps {
 export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
   const [stats, setStats] = useState(performanceMonitor.getStats());
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const { filterState, allTicketsForSearch, tickets, customers } = useTickets();
+  const { filterState, tickets, syncStatus, counts } = useTickets();
 
   // Refresh stats every 2 seconds
   useEffect(() => {
@@ -58,8 +59,6 @@ export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
 
   const contextDataSizes = {
     tickets: calculateDataSize(tickets),
-    allTicketsForSearch: calculateDataSize(allTicketsForSearch),
-    customers: calculateDataSize(customers),
     filterState: calculateDataSize(filterState)
   };
 
@@ -68,10 +67,8 @@ export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
   const sessionStorageUsage = (() => {
     try {
       let total = 0;
-      for (let key in sessionStorage) {
-        if (sessionStorage.hasOwnProperty(key)) {
-          total += sessionStorage[key].length + key.length;
-        }
+      for (const key of Object.keys(sessionStorage)) {
+        total += sessionStorage[key].length + key.length;
       }
       return total;
     } catch {
@@ -222,14 +219,14 @@ export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
                 <div className="text-xs font-medium mb-2">Context State</div>
 
                 <Card className="p-2">
-                  <div className="text-xs font-medium">Filter State</div>
+                  <div className="text-xs font-medium">Search &rarr; Store query</div>
                   <div className="text-xs text-muted-foreground mt-1 space-y-1">
-                    <div>Search: "{filterState.searchTerm}"</div>
-                    <div>Status: {filterState.statusFilter}</div>
-                    <div>Priority: {filterState.priorityFilter}</div>
-                    <div>Customer: {filterState.customerFilter || 'None'}</div>
-                    <div>Advanced: {filterState.showAdvancedFilters ? 'Yes' : 'No'}</div>
-                    <div>Size: {formatBytes(contextDataSizes.filterState)}</div>
+                    <div>Raw: "{filterState.searchTerm}"</div>
+                    <div>Sort: {filterState.sortBy}</div>
+                    {/* What the search box actually resolves to in SQL. */}
+                    <pre className="whitespace-pre-wrap break-words rounded bg-muted p-1.5 text-[10px]">
+                      {JSON.stringify(parseSearch(filterState.searchTerm).filters, null, 1)}
+                    </pre>
                   </div>
                 </Card>
 
@@ -244,23 +241,29 @@ export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
                 </Card>
 
                 <Card className="p-2">
-                  <div className="text-xs font-medium">Advanced Search</div>
+                  <div className="text-xs font-medium">Sync</div>
                   <div className="text-xs text-muted-foreground mt-1 space-y-1">
-                    <div>Loaded: {allTicketsForSearch ? 'Yes' : 'No'}</div>
-                    {allTicketsForSearch && (
-                      <>
-                        <div>Total: {allTicketsForSearch.new_tickets.length + allTicketsForSearch.my_tickets.length + allTicketsForSearch.all_tickets.length} tickets</div>
-                        <div>Size: {formatBytes(contextDataSizes.allTicketsForSearch)}</div>
-                      </>
+                    <div>State: {syncStatus?.state ?? 'unknown'}</div>
+                    <div>
+                      Last sync:{' '}
+                      {syncStatus?.lastSyncedAt
+                        ? new Date(syncStatus.lastSyncedAt).toLocaleTimeString()
+                        : 'never'}
+                    </div>
+                    <div>Stored: {counts.new + counts.mine + counts.all} bucket entries</div>
+                    {/* Non-zero means the backend's own catch block returned
+                        nulls mid-array, not that we lost rows. */}
+                    {syncStatus && syncStatus.droppedLastSync > 0 && (
+                      <div className="text-destructive">
+                        Server dropped: {syncStatus.droppedLastSync}
+                      </div>
                     )}
-                  </div>
-                </Card>
-
-                <Card className="p-2">
-                  <div className="text-xs font-medium">Customers</div>
-                  <div className="text-xs text-muted-foreground mt-1 space-y-1">
-                    <div>Count: {customers.length} customers</div>
-                    <div>Size: {formatBytes(contextDataSizes.customers)}</div>
+                    {syncStatus?.lastError && (
+                      <div className="text-destructive break-words">
+                        Error: {syncStatus.lastError}
+                        {syncStatus.retrying ? ' (retrying)' : ''}
+                      </div>
+                    )}
                   </div>
                 </Card>
 

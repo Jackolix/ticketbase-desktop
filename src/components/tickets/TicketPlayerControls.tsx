@@ -1,13 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
+import { parseTicketDate } from '@/lib/ticketDate';
+import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
+import { toPlayerState, type PlayerState } from '@/lib/playerStatus';
 import { Ticket } from '@/types/api';
 import {
   Play,
@@ -23,259 +28,240 @@ interface TicketPlayerControlsProps {
   onStatusChange?: () => void;
 }
 
+/** How often to reconcile with the server, to catch changes made elsewhere. */
+const STATUS_POLL_MS = 30_000;
+
+/**
+ * Ticket timer.
+ *
+ * Elapsed time is derived rather than stored: `baseMs` is the accumulated total
+ * as of the last authoritative reading, and `runningSince` is when that reading
+ * was taken if the clock was running. The displayed value is the sum.
+ *
+ * This matters because the previous version kept the running total in state and
+ * listed it in its own effect's dependencies, so the 30-second reconcile timer
+ * was destroyed and recreated once per second while a timer ran — and
+ * refetched status on every tick, which is what tripped the backend's rate
+ * limit. Here the tick interval depends only on whether the clock is running.
+ */
 export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerControlsProps) {
   const { user } = useAuth();
-  const [playerStatus, setPlayerStatus] = useState<string>('stopped');
-  const [isLoading, setIsLoading] = useState(false);
-  const [startTime, setStartTime] = useState<Date | null>(null);
-  const [elapsedTime, setElapsedTime] = useState(0);
+  const userId = user?.id;
+
+  const [playerState, setPlayerState] = useState<PlayerState>('stopped');
+  const [baseMs, setBaseMs] = useState(0);
+  const [runningSince, setRunningSince] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const [isBusy, setIsBusy] = useState(false);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [stopMessage, setStopMessage] = useState('');
-  const [stopStatus, setStopStatus] = useState('4'); // Default to "Abgeschlossen"
-  const [customTime, setCustomTime] = useState<string>(''); // Custom time in minutes
+  const [stopStatus, setStopStatus] = useState('4'); // Abgeschlossen
+  const [customTime, setCustomTime] = useState('');
 
-  useEffect(() => {
-    fetchPlayerStatus();
-    let timerInterval: NodeJS.Timeout;
-    let statusInterval: NodeJS.Timeout;
+  const elapsedMs = useMemo(
+    () => baseMs + (runningSince !== null ? Math.max(0, nowMs - runningSince) : 0),
+    [baseMs, runningSince, nowMs],
+  );
 
-    // Update elapsed time every second when playing (only when we have a startTime)
-    if (playerStatus === 'playing' && startTime) {
-      timerInterval = setInterval(() => {
-        setElapsedTime(Date.now() - startTime.getTime());
-      }, 1000);
-    }
-    // When paused, don't update elapsed time - it should stay at the current value
+  const applyState = useCallback((state: PlayerState, totalMinutes: number) => {
+    setPlayerState(state);
+    setBaseMs(totalMinutes * 60_000);
+    // Anchor to now: the server's total already includes everything up to this
+    // reading, so the clock continues from here.
+    setRunningSince(state === 'playing' ? Date.now() : null);
+    setNowMs(Date.now());
+  }, []);
 
-    // Poll player status every 30 seconds to detect external changes
-    statusInterval = setInterval(() => {
-      fetchPlayerStatus();
-    }, 30000);
-
-    return () => {
-      if (timerInterval) {
-        clearInterval(timerInterval);
-      }
-      if (statusInterval) {
-        clearInterval(statusInterval);
-      }
-    };
-  }, [playerStatus, startTime, ticket.id, user?.id]);
-
-  const fetchPlayerStatus = async () => {
-    if (!user) return;
+  const refreshStatus = useCallback(async () => {
+    if (!userId) return;
 
     try {
-      const response = await apiClient.getPlayerStatus(ticket.id, user.id);
-      if (response.status === 'success') {
-        // Fix: The API returns playerStatus directly, not nested under data
-        const playerStatusData = response.playerStatus;
-        if (playerStatusData) {
-          const newStatus = getPlayerStatusString(playerStatusData.play_status);
-          setPlayerStatus(newStatus);
-          
-          // Set elapsed time from API response (total_time is in minutes, convert to milliseconds)
-          const totalTimeMs = (playerStatusData.total_time || 0) * 60 * 1000;
-          setElapsedTime(totalTimeMs);
-          
-          // If the timer is running, set start time based on elapsed time
-          if (newStatus === 'playing') {
-            setStartTime(new Date(Date.now() - totalTimeMs));
-          } else if (newStatus === 'paused') {
-            // For paused state, we keep the elapsed time but no active start time
-            setStartTime(null);
-          } else if (newStatus === 'stopped') {
-            setStartTime(null);
-          }
-        } else {
-          setPlayerStatus('stopped');
-          setElapsedTime(0);
-          setStartTime(null);
-        }
+      const response = await apiClient.getPlayerStatus(ticket.id, userId);
+      if (response.status !== 'success') return;
+
+      const data = response.playerStatus;
+      if (!data) {
+        applyState('stopped', 0);
+        return;
       }
-    } catch (error: any) {
+
+      applyState(toPlayerState(data.play_status), data.total_time || 0);
+    } catch (error) {
+      // A failed poll must not reset a running timer to zero — that would look
+      // like lost work. Keep whatever we last knew and try again next tick.
       console.error('Failed to fetch player status:', error);
-      
-      // Handle rate limiting gracefully
-      if (error.message?.includes('429') || error.message?.includes('Too Many Requests')) {
-        console.warn('Rate limited - will retry on next interval');
-        return; // Don't reset status on rate limit, keep current state
+    }
+  }, [ticket.id, userId, applyState]);
+
+  // Reconcile with the server on mount and periodically, to pick up changes
+  // made from the web UI or another device.
+  useEffect(() => {
+    void refreshStatus();
+    const interval = setInterval(() => {
+      void refreshStatus();
+    }, STATUS_POLL_MS);
+    return () => clearInterval(interval);
+  }, [refreshStatus]);
+
+  // Tick the display once a second, only while the clock is actually running.
+  // `runningSince` changes only on a real state change, so this interval is
+  // created once per run rather than once per second.
+  useEffect(() => {
+    if (runningSince === null) return;
+    const interval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [runningSince]);
+
+  const run = useCallback(
+    async (action: () => Promise<void>) => {
+      setIsBusy(true);
+      try {
+        await action();
+      } finally {
+        setIsBusy(false);
       }
-      
-      // Only reset status on actual errors, not rate limiting
-      setPlayerStatus('stopped');
-      setElapsedTime(0);
-      setStartTime(null);
-    }
-  };
+    },
+    [],
+  );
 
-  // Helper function to convert numeric status to string
-  const getPlayerStatusString = (status: number): string => {
-    // API status constants from PHP
-    const PLAY = 1;
-    const PAUSE = 2;
-    const RESUME = 3;
-    const STOP = 4;
-    
-    switch (status) {
-      case PLAY:
-      case RESUME:
-        return 'playing';  // Both PLAY and RESUME mean timer is actively running
-      case PAUSE:
-        return 'paused';   // Timer is paused, can be resumed
-      case STOP:
-        return 'stopped';  // Timer is stopped/completed
-      default:
-        return 'stopped';
-    }
-  };
+  const handlePlay = () =>
+    run(async () => {
+      if (!userId) return;
+      try {
+        const response = await apiClient.play(ticket.id, userId);
 
-  const handlePlay = async () => {
-    if (!user) return;
-    
-    setIsLoading(true);
-    try {
-      // First check current status to prevent conflicts
-      await fetchPlayerStatus();
-      
-      const response = await apiClient.play(ticket.id, user.id);
-      if (response.status === 'success') {
-        setPlayerStatus('playing');
-        setStartTime(new Date());
-        setElapsedTime(0);
-        onStatusChange?.();
-      } else if (response.status === 'exists') {
-        // Ticket is already being worked on by someone else
-        alert('This ticket is already being worked on by another user.');
-        await fetchPlayerStatus(); // Refresh to get current status
-      } else {
-        console.error('Failed to start ticket:', response.message);
-        alert('Unable to start ticket. Please try again.');
-      }
-    } catch (error) {
-      console.error('Failed to start ticket:', error);
-      alert('Error starting ticket. Please check your connection and try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+        if (response.status === 'success') {
+          setPlayerState('playing');
+          setBaseMs(0);
+          setRunningSince(Date.now());
+          setNowMs(Date.now());
+          onStatusChange?.();
+          return;
+        }
 
-  const handlePause = async () => {
-    if (!user) return;
-    
-    setIsLoading(true);
-    try {
-      // Pass current state (1 = PLAY) to pause API
-      const response = await apiClient.pause(ticket.id, user.id, 1);
-      if (response.status === 'success') {
-        setPlayerStatus('paused');
-        // Stop the timer but keep elapsed time
-        setStartTime(null);
-        onStatusChange?.();
-      }
-    } catch (error) {
-      console.error('Failed to pause ticket:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+        if (response.status === 'exists') {
+          toast.warning('Bereits in Bearbeitung', {
+            description: 'Jemand anderes arbeitet gerade an diesem Ticket.',
+          });
+          await refreshStatus();
+          return;
+        }
 
-  const handleResume = async () => {
-    if (!user) return;
-    
-    setIsLoading(true);
-    try {
-      // Pass current state (2 = PAUSE) to resume API
-      const response = await apiClient.resume(ticket.id, user.id, 2);
-      if (response.status === 'success') {
-        setPlayerStatus('playing');
-        // Use the current elapsed time to set the start time correctly
-        setStartTime(new Date(Date.now() - elapsedTime));
-        onStatusChange?.();
-        // Refresh status immediately to get updated state from server
-        setTimeout(() => fetchPlayerStatus(), 1000);
-      }
-    } catch (error) {
-      console.error('Failed to resume ticket:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleStop = async () => {
-    if (!user || !stopMessage.trim()) return;
-
-    setIsLoading(true);
-    try {
-      // Parse custom time (in minutes)
-      const newTimeInMinutes = parseInt(customTime) || 0;
-      const oldTimeInMinutes = Math.ceil(elapsedTime / 60000);
-
-      // First, set the correction time using correctWatch API
-      if (newTimeInMinutes > 0 && newTimeInMinutes !== oldTimeInMinutes) {
-        await apiClient.correctWatch({
-          ticket_id: ticket.id,
-          user_id: user.id,
-          old_time: oldTimeInMinutes,
-          new_time: newTimeInMinutes,
+        toast.error('Zeiterfassung konnte nicht gestartet werden', {
+          description: response.message || 'Der Server hat die Anfrage abgelehnt.',
+        });
+      } catch (error) {
+        console.error('Failed to start ticket:', error);
+        toast.error('Zeiterfassung konnte nicht gestartet werden', {
+          description: 'Verbindung prüfen und erneut versuchen.',
         });
       }
+    });
 
-      // Then save the ticket history (which will use the corrected time)
-      const response = await apiClient.saveTicketHistory({
-        ticket_id: ticket.id,
-        user_id: user.id,
-        verlauf_text: stopMessage,
-        status_id: parseInt(stopStatus),
-        sendMail: 0,
-      });
+  const handlePause = () =>
+    run(async () => {
+      if (!userId) return;
+      try {
+        // current_state 1 = PLAY
+        const response = await apiClient.pause(ticket.id, userId, 1);
+        if (response.status === 'success') {
+          // Freeze the accumulated total, then stop the clock.
+          setBaseMs(elapsedMs);
+          setRunningSince(null);
+          setPlayerState('paused');
+          onStatusChange?.();
+        } else {
+          toast.error('Zeiterfassung konnte nicht pausiert werden');
+        }
+      } catch (error) {
+        console.error('Failed to pause ticket:', error);
+        toast.error('Zeiterfassung konnte nicht pausiert werden');
+      }
+    });
 
-      if (response.status === 'success') {
-        setPlayerStatus('stopped');
-        setStartTime(null);
-        setElapsedTime(0);
+  const handleResume = () =>
+    run(async () => {
+      if (!userId) return;
+      try {
+        // current_state 2 = PAUSE
+        const response = await apiClient.resume(ticket.id, userId, 2);
+        if (response.status === 'success') {
+          setRunningSince(Date.now());
+          setNowMs(Date.now());
+          setPlayerState('playing');
+          onStatusChange?.();
+        } else {
+          toast.error('Zeiterfassung konnte nicht fortgesetzt werden');
+        }
+      } catch (error) {
+        console.error('Failed to resume ticket:', error);
+        toast.error('Zeiterfassung konnte nicht fortgesetzt werden');
+      }
+    });
+
+  const handleStop = () =>
+    run(async () => {
+      if (!userId || !stopMessage.trim()) return;
+
+      try {
+        const trackedMinutes = Math.ceil(elapsedMs / 60_000);
+        const submittedMinutes = parseInt(customTime, 10) || 0;
+
+        // Record a manual correction only when the technician actually changed
+        // the number; saveVerlaufApi reads the correction back out.
+        if (submittedMinutes > 0 && submittedMinutes !== trackedMinutes) {
+          await apiClient.correctWatch({
+            ticket_id: ticket.id,
+            user_id: userId,
+            old_time: trackedMinutes,
+            new_time: submittedMinutes,
+          });
+        }
+
+        // Deliberately no call to /stop. saveVerlaufApi ends with
+        // resetWorkStatus(), which clears the player state itself — and /stop
+        // only acts when it receives a current_state, which this client does
+        // not send. Calling it would be a no-op at best.
+        const response = await apiClient.saveTicketHistory({
+          ticket_id: ticket.id,
+          user_id: userId,
+          verlauf_text: stopMessage,
+          status_id: parseInt(stopStatus, 10),
+          sendMail: 0,
+        });
+
+        if (response.status !== 'success') {
+          toast.error('Arbeit konnte nicht gespeichert werden', {
+            description: response.message || 'Der Server hat den Eintrag abgelehnt.',
+          });
+          return;
+        }
+
+        setPlayerState('stopped');
+        setBaseMs(0);
+        setRunningSince(null);
         setIsStopDialogOpen(false);
         setStopMessage('');
         setCustomTime('');
+        toast.success(`${submittedMinutes || trackedMinutes} Min. auf Ticket #${ticket.id} gebucht`);
         onStatusChange?.();
+      } catch (error) {
+        console.error('Failed to stop ticket and save work:', error);
+        toast.error('Arbeit konnte nicht gespeichert werden', {
+          description: 'Es wurde nichts gebucht. Verbindung prüfen und erneut versuchen.',
+        });
       }
-    } catch (error) {
-      console.error('Failed to stop ticket and save work:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    });
 
   const handleStopClick = () => {
-    // Initialize custom time with current elapsed time in minutes
-    const elapsedMinutes = Math.ceil(elapsedTime / 60000);
-    setCustomTime(elapsedMinutes.toString());
+    setCustomTime(Math.ceil(elapsedMs / 60_000).toString());
     setIsStopDialogOpen(true);
   };
 
-  const formatTime = (milliseconds: number) => {
-    const seconds = Math.floor(milliseconds / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    
-    return `${hours.toString().padStart(2, '0')}:${(minutes % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'playing': return 'default';
-      case 'paused': return 'secondary';
-      default: return 'outline';
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'playing': return <Play className="h-3 w-3 text-green-500 fill-green-500" />;
-      case 'paused': return <Pause className="h-3 w-3 text-yellow-500" />;
-      default: return <Square className="h-3 w-3 text-muted-foreground" />;
-    }
-  };
+  const scheduledFor = ticket.ticket_start
+    ? parseTicketDate(ticket.ticket_start)?.toLocaleString() ?? ticket.ticket_start
+    : null;
 
   return (
     <Card>
@@ -283,140 +269,106 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         <CardTitle className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock className="h-5 w-5" />
-            Ticket Timer
+            Zeiterfassung
           </div>
-          <Badge variant={getStatusColor(playerStatus)}>
+          <Badge variant={STATUS_BADGE[playerState]}>
             <div className="flex items-center gap-1">
-              {getStatusIcon(playerStatus)}
-              {playerStatus.charAt(0).toUpperCase() + playerStatus.slice(1)}
+              {STATUS_ICON[playerState]}
+              {STATUS_LABEL[playerState]}
             </div>
           </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Time Display */}
         <div className="text-center">
-          <div className="text-3xl font-mono font-bold">
-            {formatTime(elapsedTime)}
+          <div className="text-3xl font-mono font-bold tabular-nums">
+            {formatDuration(elapsedMs)}
           </div>
-          <p className="text-sm text-muted-foreground">
-            {playerStatus === 'playing' ? 'Timer running' : 
-             playerStatus === 'paused' ? 'Timer paused' : 'Timer stopped'}
-          </p>
+          <p className="text-sm text-muted-foreground">{STATUS_HINT[playerState]}</p>
         </div>
 
-        {/* Control Buttons */}
         <div className="flex justify-center gap-2">
-          {playerStatus === 'stopped' && (
-            <Button
-              onClick={handlePlay}
-              disabled={isLoading}
-              className="flex items-center gap-2"
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4" />
-              )}
-              Start
+          {playerState === 'stopped' && (
+            <Button onClick={handlePlay} disabled={isBusy} className="flex items-center gap-2">
+              {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Starten
             </Button>
           )}
-          
-          {playerStatus === 'playing' && (
+
+          {playerState === 'playing' && (
             <Button
               onClick={handlePause}
-              disabled={isLoading}
+              disabled={isBusy}
               variant="secondary"
               className="flex items-center gap-2"
             >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Pause className="h-4 w-4" />
-              )}
-              Pause
+              {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
+              Pausieren
             </Button>
           )}
-          
-          {playerStatus === 'paused' && (
-            <Button
-              onClick={handleResume}
-              disabled={isLoading}
-              className="flex items-center gap-2"
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RotateCcw className="h-4 w-4" />
-              )}
-              Resume
+
+          {playerState === 'paused' && (
+            <Button onClick={handleResume} disabled={isBusy} className="flex items-center gap-2">
+              {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+              Fortsetzen
             </Button>
           )}
-          
-          {(playerStatus === 'playing' || playerStatus === 'paused') && (
+
+          {playerState !== 'stopped' && (
             <Dialog open={isStopDialogOpen} onOpenChange={setIsStopDialogOpen}>
               <DialogTrigger asChild>
                 <Button
                   onClick={handleStopClick}
-                  disabled={isLoading}
+                  disabled={isBusy}
                   variant="destructive"
                   className="flex items-center gap-2"
                 >
                   <Square className="h-4 w-4" />
-                  Finish Work
+                  Abschließen
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
-                  <DialogTitle>Finish Work on Ticket #{ticket.id}</DialogTitle>
+                  <DialogTitle>Arbeit an Ticket #{ticket.id} abschließen</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <label htmlFor="work-description" className="text-sm font-medium">
-                      Work Description
-                    </label>
+                    <Label htmlFor="work-description">Was wurde gemacht?</Label>
                     <Textarea
                       id="work-description"
-                      placeholder="Describe what you accomplished..."
+                      placeholder="Durchgeführte Arbeiten beschreiben…"
                       value={stopMessage}
                       onChange={(e) => setStopMessage(e.target.value)}
                       rows={4}
                     />
                   </div>
                   <div className="space-y-2">
-                    <label htmlFor="ticket-status" className="text-sm font-medium">
-                      Update Ticket Status
-                    </label>
+                    <Label htmlFor="ticket-status">Neuer Ticketstatus</Label>
                     <Select value={stopStatus} onValueChange={setStopStatus}>
                       <SelectTrigger id="ticket-status">
-                        <SelectValue placeholder="Select status" />
+                        <SelectValue placeholder="Status wählen" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="4">Abgeschlossen</SelectItem>
-                        <SelectItem value="3">Prüfen</SelectItem>
-                        <SelectItem value="2">Terminiert</SelectItem>
-                        <SelectItem value="5">Offen</SelectItem>
-                        <SelectItem value="6">Vor Ort</SelectItem>
-                        <SelectItem value="8">Wieder geöffnet</SelectItem>
-                        <SelectItem value="9">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
-                        <SelectItem value="11">Warten auf Rückmeldung (Extern)</SelectItem>
+                        {TICKET_STATUS_OPTIONS.map((option) => (
+                          <SelectItem key={option.id} value={option.id}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <label htmlFor="custom-time" className="text-sm font-medium">
-                      Time to Submit (minutes)
-                    </label>
+                    <Label htmlFor="custom-time">Zu buchende Zeit (Minuten)</Label>
                     <Input
                       id="custom-time"
                       type="number"
                       min="0"
-                      placeholder="Enter time in minutes"
+                      placeholder="Minuten"
                       value={customTime}
                       onChange={(e) => setCustomTime(e.target.value)}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Tracked time: {formatTime(elapsedTime)} ({Math.ceil(elapsedTime / 60000)} minutes)
+                      Erfasst: {formatDuration(elapsedMs)} ({Math.ceil(elapsedMs / 60_000)} Min.)
                     </p>
                   </div>
                 </div>
@@ -424,20 +376,17 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                   <Button
                     variant="outline"
                     onClick={() => setIsStopDialogOpen(false)}
-                    disabled={isLoading}
+                    disabled={isBusy}
                   >
-                    Cancel
+                    Abbrechen
                   </Button>
-                  <Button
-                    onClick={handleStop}
-                    disabled={isLoading || !stopMessage.trim()}
-                  >
-                    {isLoading ? (
+                  <Button onClick={handleStop} disabled={isBusy || !stopMessage.trim()}>
+                    {isBusy ? (
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     ) : (
                       <Square className="h-4 w-4 mr-2" />
                     )}
-                    Finish & Save
+                    Abschließen &amp; speichern
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -445,13 +394,45 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
           )}
         </div>
 
-        {/* Additional Info */}
-        {ticket.ticket_start && (
+        {scheduledFor && (
           <div className="text-center pt-2 border-t text-sm text-muted-foreground">
-            <p>Scheduled: {new Date(ticket.ticket_start).toLocaleString()}</p>
+            <p>Terminiert: {scheduledFor}</p>
           </div>
         )}
       </CardContent>
     </Card>
   );
+}
+
+const STATUS_BADGE: Record<PlayerState, 'default' | 'secondary' | 'outline'> = {
+  playing: 'default',
+  paused: 'secondary',
+  stopped: 'outline',
+};
+
+const STATUS_LABEL: Record<PlayerState, string> = {
+  playing: 'Läuft',
+  paused: 'Pausiert',
+  stopped: 'Gestoppt',
+};
+
+const STATUS_HINT: Record<PlayerState, string> = {
+  playing: 'Zeit läuft',
+  paused: 'Zeit pausiert',
+  stopped: 'Keine Zeit erfasst',
+};
+
+const STATUS_ICON: Record<PlayerState, React.ReactNode> = {
+  playing: <Play className="h-3 w-3 text-green-500 fill-green-500" />,
+  paused: <Pause className="h-3 w-3 text-yellow-500" />,
+  stopped: <Square className="h-3 w-3 text-muted-foreground" />,
+};
+
+function formatDuration(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return [hours, minutes, seconds].map((n) => n.toString().padStart(2, '0')).join(':');
 }

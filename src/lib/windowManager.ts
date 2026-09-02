@@ -127,13 +127,13 @@ export class WindowManager {
       try {
         console.log('Opening file with openPath:', fullFilePath);
         await opener.openPath(fullFilePath);
-      } catch (pathError) {
+      } catch {
         console.log('openPath failed, trying with file:// URL');
         try {
           // Convert path to proper file URL format for all platforms
           const fileUrl = `file://${fullFilePath.startsWith('/') ? '' : '/'}${fullFilePath.replace(/\\/g, '/')}`;
           await opener.openUrl(fileUrl);
-        } catch (urlError) {
+        } catch {
           console.log('openUrl failed, trying revealItemInDir to show file in folder');
           await opener.revealItemInDir(fullFilePath);
           console.log('File revealed in temp folder');

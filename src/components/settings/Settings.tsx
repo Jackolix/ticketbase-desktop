@@ -1,644 +1,464 @@
-import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Bell,
+  CheckCircle,
+  Info,
+  Loader2,
+  Lock,
+  Mail,
+  RefreshCw,
+  Settings as SettingsIcon,
+  User,
+  Volume2,
+} from 'lucide-react';
+import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { PageHeader } from '@/components/PageHeader';
 import { useAuth } from '@/contexts/AuthContext';
-import { useUpdater } from '@/contexts/UpdaterContext';
 import { useNotifications } from '@/contexts/NotificationContext';
+import { useUpdater } from '@/contexts/UpdaterContext';
+import { useAvailability } from '@/hooks/useAvailability';
 import { apiClient } from '@/lib/api';
-import {
-  User,
-  Mail,
-  Lock,
-  Bell,
-  Info,
-  RefreshCw,
-  Loader2,
-  CheckCircle,
-  AlertCircle,
-  Volume2,
-  Monitor,
-  Clock
-} from 'lucide-react';
+
+/** Mail setting ids, as expected by userMailSettings(type). */
+const MAIL_TYPES = {
+  pool: 1,
+  help: 2,
+  message: 3,
+  forward: 4,
+} as const;
+
+interface MailSettings {
+  new_ticket_pool_mail: boolean;
+  new_help_mail: boolean;
+  new_message_mail: boolean;
+  new_forward_mail: boolean;
+}
 
 export function Settings() {
   const { user } = useAuth();
-  const { currentVersion, isCheckingForUpdate, checkForUpdate, lastError, clearError, lastCheckTime, debugInfo } = useUpdater();
+  const { currentVersion, isCheckingForUpdate, checkForUpdate, lastError, lastCheckTime } =
+    useUpdater();
   const { settings, updateSettings, requestNotificationPermission } = useNotifications();
-  const [profileData, setProfileData] = useState({
-    name: user?.name || '',
-    phone: user?.phone || ''
-  });
-  const [passwordData, setPasswordData] = useState({
-    newPassword: '',
-    confirmPassword: ''
-  });
-  const [mailSettings, setMailSettings] = useState({
+
+  const [profile, setProfile] = useState({ name: user?.name ?? '', phone: user?.phone ?? '' });
+  const [password, setPassword] = useState({ next: '', confirm: '' });
+  const [mail, setMail] = useState<MailSettings>({
     new_ticket_pool_mail: false,
     new_help_mail: false,
     new_message_mail: false,
-    new_forward_mail: false
+    new_forward_mail: false,
   });
-  
-  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
-  const [isLoadingPassword, setIsLoadingPassword] = useState(false);
-  const [isLoadingMail, setIsLoadingMail] = useState(false);
-  const [successMessage, setSuccessMessage] = useState('');
-  const [errorMessage, setErrorMessage] = useState('');
 
-  useEffect(() => {
-    fetchMailSettings();
-  }, [user]);
+  const [busy, setBusy] = useState<string | null>(null);
+  // Shared with the sidebar action, so the two cannot disagree.
+  const { isAvailable, isBusy: isAvailabilityBusy, setAvailable } = useAvailability();
 
-  const fetchMailSettings = async () => {
+  const fetchMailSettings = useCallback(async () => {
     if (!user) return;
-    
     try {
       const response = await apiClient.getUsersMailSettings(user.id);
       if (response.status === 'success' && response.data) {
-        setMailSettings({
-          new_ticket_pool_mail: response.data.user_mail_settings_arr.new_ticket_pool_mail,
-          new_help_mail: response.data.user_mail_settings_arr.new_help_mail,
-          new_message_mail: response.data.user_mail_settings_arr.new_message_mail,
-          new_forward_mail: response.data.user_mail_settings_arr.new_forward_mail
-        });
+        setMail(response.data.user_mail_settings_arr);
       }
     } catch (error) {
       console.error('Failed to fetch mail settings:', error);
     }
-  };
+  }, [user]);
 
-  const handleProfileSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    void fetchMailSettings();
+  }, [fetchMailSettings]);
+
+  const saveProfile = async (event: React.FormEvent) => {
+    event.preventDefault();
     if (!user) return;
 
-    if (!profileData.name.trim()) {
-      setErrorMessage('Name is required');
+    if (!profile.name.trim()) {
+      toast.error('Name darf nicht leer sein');
       return;
     }
 
-    setIsLoadingProfile(true);
-    setErrorMessage('');
-    setSuccessMessage('');
-
+    setBusy('profile');
     try {
-      const response = await apiClient.editProfile(user.id, profileData.name, profileData.phone);
-      if (response.status === 'success') {
-        setSuccessMessage('Profile updated successfully');
-      } else {
-        setErrorMessage(response.message || 'Failed to update profile');
-      }
-    } catch (error) {
-      setErrorMessage('Failed to update profile');
+      const response = await apiClient.editProfile(user.id, profile.name, profile.phone);
+      if (response.status === 'success') toast.success('Profil gespeichert');
+      else toast.error(response.message || 'Profil konnte nicht gespeichert werden');
+    } catch {
+      toast.error('Profil konnte nicht gespeichert werden');
     } finally {
-      setIsLoadingProfile(false);
+      setBusy(null);
     }
   };
 
-  const handlePasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const savePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
     if (!user) return;
 
-    if (!passwordData.newPassword) {
-      setErrorMessage('New password is required');
+    if (password.next.length < 6) {
+      toast.error('Das Passwort muss mindestens 6 Zeichen haben');
+      return;
+    }
+    if (password.next !== password.confirm) {
+      toast.error('Die Passwörter stimmen nicht überein');
       return;
     }
 
-    if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setErrorMessage('Passwords do not match');
-      return;
-    }
-
-    if (passwordData.newPassword.length < 6) {
-      setErrorMessage('Password must be at least 6 characters');
-      return;
-    }
-
-    setIsLoadingPassword(true);
-    setErrorMessage('');
-    setSuccessMessage('');
-
+    setBusy('password');
     try {
-      const response = await apiClient.changePassword(user.id, passwordData.newPassword);
+      const response = await apiClient.changePassword(user.id, password.next);
       if (response.status === 'success') {
-        setSuccessMessage('Password updated successfully');
-        setPasswordData({ newPassword: '', confirmPassword: '' });
+        toast.success('Passwort geändert');
+        setPassword({ next: '', confirm: '' });
       } else {
-        setErrorMessage(response.message || 'Failed to update password');
+        toast.error(response.message || 'Passwort konnte nicht geändert werden');
       }
-    } catch (error) {
-      setErrorMessage('Failed to update password');
+    } catch {
+      toast.error('Passwort konnte nicht geändert werden');
     } finally {
-      setIsLoadingPassword(false);
+      setBusy(null);
     }
   };
 
-  const handleMailSettingChange = async (type: number, value: boolean) => {
+  const setMailSetting = async (key: keyof MailSettings, type: number, value: boolean) => {
     if (!user) return;
 
-    setIsLoadingMail(true);
+    const previous = mail[key];
+    setMail((m) => ({ ...m, [key]: value })); // optimistic
+
     try {
       const response = await apiClient.userMailSettings(user.id, value ? 1 : 0, type);
-      if (response.status === 'success') {
-        setSuccessMessage('Mail settings updated');
-      }
+      if (response.status !== 'success') throw new Error(response.message);
     } catch (error) {
-      setErrorMessage('Failed to update mail settings');
-    } finally {
-      setIsLoadingMail(false);
+      console.error('Failed to update mail settings:', error);
+      setMail((m) => ({ ...m, [key]: previous })); // roll back
+      toast.error('E-Mail-Einstellung konnte nicht gespeichert werden');
     }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-bold">Settings</h1>
-        <p className="text-muted-foreground">
-          Manage your account settings and preferences.
-        </p>
-      </div>
+    <div className="w-full max-w-3xl space-y-5">
+      <PageHeader
+        title="Einstellungen"
+        description={user?.email}
+        icon={SettingsIcon}
+      />
 
-      {successMessage && (
-        <Alert>
-          <CheckCircle className="h-4 w-4" />
-          <AlertDescription>{successMessage}</AlertDescription>
-        </Alert>
-      )}
-
-      {errorMessage && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{errorMessage}</AlertDescription>
-        </Alert>
-      )}
+      {/* Availability is the one setting with same-day operational meaning, so
+          it sits above the tabs rather than buried in one. */}
+      <Card className="flex-row items-center justify-between gap-4 px-3 py-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">Heute verfügbar</p>
+          <p className="text-xs text-muted-foreground">
+            Steuert, ob dir heute Tickets zugewiesen werden.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {isAvailable !== null && (
+            <span
+              className={`text-xs ${isAvailable ? 'text-tone-success' : 'text-muted-foreground'}`}
+            >
+              {isAvailable ? 'Verfügbar' : 'Nicht verfügbar'}
+            </span>
+          )}
+          {isAvailabilityBusy ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Switch
+              checked={isAvailable ?? false}
+              onCheckedChange={(v) => void setAvailable(v)}
+              disabled={isAvailable === null}
+              aria-label="Heute verfügbar"
+            />
+          )}
+        </div>
+      </Card>
 
       <Tabs defaultValue="profile" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="profile">
-            <User className="w-4 h-4 mr-2" />
-            Profile
+        <TabsList>
+          <TabsTrigger value="profile" className="gap-1.5 text-xs">
+            <User className="h-3.5 w-3.5" /> Profil
           </TabsTrigger>
-          <TabsTrigger value="password">
-            <Lock className="w-4 h-4 mr-2" />
-            Password
+          <TabsTrigger value="notifications" className="gap-1.5 text-xs">
+            <Bell className="h-3.5 w-3.5" /> Benachrichtigungen
           </TabsTrigger>
-          <TabsTrigger value="notifications">
-            <Bell className="w-4 h-4 mr-2" />
-            Notifications
+          <TabsTrigger value="mail" className="gap-1.5 text-xs">
+            <Mail className="h-3.5 w-3.5" /> E-Mail
           </TabsTrigger>
-          <TabsTrigger value="about">
-            <Info className="w-4 h-4 mr-2" />
-            About
+          <TabsTrigger value="about" className="gap-1.5 text-xs">
+            <Info className="h-3.5 w-3.5" /> Über
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="profile">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <User className="h-5 w-5" />
-                Profile Information
-              </CardTitle>
-              <CardDescription>
-                Update your personal information and contact details.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleProfileSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Full Name</Label>
-                  <Input
-                    id="name"
-                    value={profileData.name}
-                    onChange={(e) => setProfileData(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="Enter your full name"
-                    disabled={isLoadingProfile}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    value={user?.email || ''}
-                    disabled
-                    className="bg-muted"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Email cannot be changed. Contact your administrator.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="phone">Phone</Label>
-                  <Input
-                    id="phone"
-                    value={profileData.phone}
-                    onChange={(e) => setProfileData(prev => ({ ...prev, phone: e.target.value }))}
-                    placeholder="Enter your phone number"
-                    disabled={isLoadingProfile}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Role</Label>
-                  <Input
-                    value={user?.role.name || ''}
-                    disabled
-                    className="bg-muted"
-                  />
-                </div>
-
-                <Button type="submit" disabled={isLoadingProfile}>
-                  {isLoadingProfile ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Updating...
-                    </>
-                  ) : (
-                    'Update Profile'
-                  )}
+        <TabsContent value="profile" className="m-0 space-y-4">
+          <Section title="Profil" icon={User}>
+            <form onSubmit={saveProfile} className="space-y-3">
+              <Row label="Name" htmlFor="name">
+                <Input
+                  id="name"
+                  value={profile.name}
+                  onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))}
+                  className="h-8 text-xs"
+                />
+              </Row>
+              <Row label="Telefon" htmlFor="phone">
+                <Input
+                  id="phone"
+                  value={profile.phone}
+                  onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value }))}
+                  className="h-8 text-xs"
+                />
+              </Row>
+              <Row label="E-Mail">
+                <Input value={user?.email ?? ''} disabled className="h-8 text-xs" />
+              </Row>
+              <div className="flex justify-end">
+                <Button type="submit" size="sm" disabled={busy === 'profile'} className="h-8 gap-1.5 text-xs">
+                  {busy === 'profile' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Speichern
                 </Button>
-              </form>
-            </CardContent>
-          </Card>
+              </div>
+            </form>
+          </Section>
+
+          <Section title="Passwort" icon={Lock}>
+            <form onSubmit={savePassword} className="space-y-3">
+              <Row label="Neues Passwort" htmlFor="new-password">
+                <Input
+                  id="new-password"
+                  type="password"
+                  value={password.next}
+                  onChange={(e) => setPassword((p) => ({ ...p, next: e.target.value }))}
+                  className="h-8 text-xs"
+                />
+              </Row>
+              <Row label="Bestätigen" htmlFor="confirm-password">
+                <Input
+                  id="confirm-password"
+                  type="password"
+                  value={password.confirm}
+                  onChange={(e) => setPassword((p) => ({ ...p, confirm: e.target.value }))}
+                  className="h-8 text-xs"
+                />
+              </Row>
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={busy === 'password' || !password.next}
+                  className="h-8 gap-1.5 text-xs"
+                >
+                  {busy === 'password' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Passwort ändern
+                </Button>
+              </div>
+            </form>
+          </Section>
         </TabsContent>
 
-        <TabsContent value="password">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Lock className="h-5 w-5" />
-                Change Password
-              </CardTitle>
-              <CardDescription>
-                Update your password to keep your account secure.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handlePasswordSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="newPassword">New Password</Label>
-                  <Input
-                    id="newPassword"
-                    type="password"
-                    value={passwordData.newPassword}
-                    onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
-                    placeholder="Enter new password"
-                    disabled={isLoadingPassword}
-                  />
-                </div>
+        <TabsContent value="notifications" className="m-0 space-y-4">
+          <Section title="Benachrichtigungen" icon={Bell}>
+            <Toggle
+              label="Neue Tickets im Pool"
+              hint="Melden, wenn ein Ticket im Pool erscheint."
+              checked={settings.enableNewTicketNotifications}
+              onChange={(v) => updateSettings({ enableNewTicketNotifications: v })}
+            />
+            <Toggle
+              label="Mir zugewiesene Tickets"
+              hint="Melden, wenn dir ein Ticket zugewiesen wird."
+              checked={settings.enableAssignedTicketNotifications}
+              onChange={(v) => updateSettings({ enableAssignedTicketNotifications: v })}
+            />
+            <Toggle
+              label="Ton"
+              hint="Zusätzlich zur Benachrichtigung einen Ton abspielen."
+              checked={settings.enableSound}
+              onChange={(v) => updateSettings({ enableSound: v })}
+            />
 
-                <div className="space-y-2">
-                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
-                  <Input
-                    id="confirmPassword"
-                    type="password"
-                    value={passwordData.confirmPassword}
-                    onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                    placeholder="Confirm new password"
-                    disabled={isLoadingPassword}
-                  />
-                </div>
-
-                <Button type="submit" disabled={isLoadingPassword || !passwordData.newPassword || !passwordData.confirmPassword}>
-                  {isLoadingPassword ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Updating...
-                    </>
-                  ) : (
-                    'Change Password'
-                  )}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="notifications" className="space-y-4">
-          {/* Desktop Notifications */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Monitor className="h-5 w-5" />
-                Desktop Notifications
-              </CardTitle>
-              <CardDescription>
-                Configure desktop notifications for new tickets and assignments.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>New Tickets Available</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified when new tickets appear in your pool
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.enableNewTicketNotifications}
-                  onCheckedChange={(checked) => updateSettings({ enableNewTicketNotifications: checked })}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Assigned Tickets</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified when tickets are assigned to you
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.enableAssignedTicketNotifications}
-                  onCheckedChange={(checked) => updateSettings({ enableAssignedTicketNotifications: checked })}
-                />
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Notification Sound</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Play sound with notifications
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.enableSound}
-                    onCheckedChange={(checked) => updateSettings({ enableSound: checked })}
-                  />
-                </div>
-
-                {settings.enableSound && (
-                  <div className="ml-8 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-sm">Volume</Label>
-                      <span className="text-sm text-muted-foreground">
-                        {Math.round(settings.soundVolume * 100)}%
-                      </span>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <Volume2 className="h-4 w-4 text-muted-foreground" />
-                      <Slider
-                        value={[settings.soundVolume]}
-                        onValueChange={([value]) => updateSettings({ soundVolume: value })}
-                        max={1}
-                        min={0}
-                        step={0.1}
-                        className="flex-1"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2 pt-4 border-t">
-                <Label htmlFor="refresh-interval" className="flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  Ticket Refresh Interval
+            {settings.enableSound && (
+              <div className="space-y-2 pt-1">
+                <Label className="flex items-center gap-1.5 text-xs">
+                  <Volume2 className="h-3.5 w-3.5" />
+                  Lautstärke — {Math.round(settings.soundVolume * 100)}%
                 </Label>
-                <p className="text-sm text-muted-foreground mb-2">
-                  How often to check for new tickets
-                </p>
-                <Select
-                  value={(settings.ticketRefreshInterval ?? 30).toString()}
-                  onValueChange={(value) => updateSettings({ ticketRefreshInterval: parseInt(value) })}
-                >
-                  <SelectTrigger id="refresh-interval">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="15">Every 15 seconds</SelectItem>
-                    <SelectItem value="30">Every 30 seconds</SelectItem>
-                    <SelectItem value="60">Every 1 minute</SelectItem>
-                    <SelectItem value="120">Every 2 minutes</SelectItem>
-                    <SelectItem value="300">Every 5 minutes</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="pt-4 border-t">
-                <Button
-                  onClick={async () => {
-                    try {
-                      const granted = await requestNotificationPermission();
-                      if (granted) {
-                        setSuccessMessage('Desktop notification permission granted');
-                      } else {
-                        setErrorMessage('Desktop notification permission denied');
-                      }
-                    } catch (error) {
-                      setErrorMessage('Failed to request notification permission');
-                    }
-                  }}
-                  variant="outline"
-                >
-                  <Bell className="w-4 h-4 mr-2" />
-                  Enable Desktop Notifications
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Email Notifications */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Mail className="h-5 w-5" />
-                Email Notifications
-              </CardTitle>
-              <CardDescription>
-                Configure when you want to receive email notifications.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>New Tickets in Pool</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified when new tickets are added to your pool
-                  </p>
-                </div>
-                <Switch
-                  checked={mailSettings.new_ticket_pool_mail}
-                  onCheckedChange={(checked) => {
-                    setMailSettings(prev => ({ ...prev, new_ticket_pool_mail: checked }));
-                    handleMailSettingChange(2, checked);
-                  }}
-                  disabled={isLoadingMail}
+                <Slider
+                  value={[settings.soundVolume]}
+                  onValueChange={([v]) => updateSettings({ soundVolume: v })}
+                  min={0}
+                  max={1}
+                  step={0.05}
                 />
               </div>
+            )}
 
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Help Requests</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified when someone requests help
-                  </p>
-                </div>
-                <Switch
-                  checked={mailSettings.new_help_mail}
-                  onCheckedChange={(checked) => {
-                    setMailSettings(prev => ({ ...prev, new_help_mail: checked }));
-                    handleMailSettingChange(3, checked);
-                  }}
-                  disabled={isLoadingMail}
-                />
-              </div>
+            <div className="space-y-2 pt-1">
+              <Label className="text-xs">
+                Aktualisierungsintervall — {settings.ticketRefreshInterval}s
+              </Label>
+              <Slider
+                value={[settings.ticketRefreshInterval]}
+                onValueChange={([v]) => updateSettings({ ticketRefreshInterval: v })}
+                min={10}
+                max={300}
+                step={10}
+              />
+              {/* Worth stating: one sync now serves every window, so this is
+                  the app's total polling rate, not per-window. */}
+              <p className="text-[11px] text-muted-foreground">
+                Gilt für die gesamte App — unabhängig davon, wie viele Fenster offen sind.
+                Werte unter 10&nbsp;s werden serverseitig auf 10&nbsp;s angehoben.
+              </p>
+            </div>
 
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>New Messages</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified about new messages in tickets
-                  </p>
-                </div>
-                <Switch
-                  checked={mailSettings.new_message_mail}
-                  onCheckedChange={(checked) => {
-                    setMailSettings(prev => ({ ...prev, new_message_mail: checked }));
-                    handleMailSettingChange(4, checked);
-                  }}
-                  disabled={isLoadingMail}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Forwarded Tickets</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified when tickets are forwarded to you
-                  </p>
-                </div>
-                <Switch
-                  checked={mailSettings.new_forward_mail}
-                  onCheckedChange={(checked) => {
-                    setMailSettings(prev => ({ ...prev, new_forward_mail: checked }));
-                    handleMailSettingChange(5, checked);
-                  }}
-                  disabled={isLoadingMail}
-                />
-              </div>
-
-              <div className="pt-4 border-t">
-                <Button
-                  onClick={() => {
-                    const allEnabled = true;
-                    setMailSettings({
-                      new_ticket_pool_mail: allEnabled,
-                      new_help_mail: allEnabled,
-                      new_message_mail: allEnabled,
-                      new_forward_mail: allEnabled
-                    });
-                    handleMailSettingChange(1, allEnabled);
-                  }}
-                  variant="outline"
-                  disabled={isLoadingMail}
-                >
-                  Enable All Email Notifications
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+            <div className="pt-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void requestNotificationPermission()}
+              >
+                Systemberechtigung anfordern
+              </Button>
+            </div>
+          </Section>
         </TabsContent>
 
-        <TabsContent value="about">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Info className="h-5 w-5" />
-                About
-              </CardTitle>
-              <CardDescription>
-                Application information and updates
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-muted/20 rounded-lg">
-                  <div>
-                    <Label className="text-base font-medium">Current Version</Label>
-                    <p className="text-2xl font-semibold text-primary">
-                      {currentVersion || 'Loading...'}
-                    </p>
-                  </div>
-                </div>
+        <TabsContent value="mail" className="m-0">
+          <Section title="E-Mail-Benachrichtigungen" icon={Mail}>
+            <Toggle
+              label="Neues Ticket im Pool"
+              checked={mail.new_ticket_pool_mail}
+              onChange={(v) => void setMailSetting('new_ticket_pool_mail', MAIL_TYPES.pool, v)}
+            />
+            <Toggle
+              label="Hilfeanfragen"
+              checked={mail.new_help_mail}
+              onChange={(v) => void setMailSetting('new_help_mail', MAIL_TYPES.help, v)}
+            />
+            <Toggle
+              label="Neue Nachrichten"
+              checked={mail.new_message_mail}
+              onChange={(v) => void setMailSetting('new_message_mail', MAIL_TYPES.message, v)}
+            />
+            <Toggle
+              label="Weitergeleitete Tickets"
+              checked={mail.new_forward_mail}
+              onChange={(v) => void setMailSetting('new_forward_mail', MAIL_TYPES.forward, v)}
+            />
+          </Section>
+        </TabsContent>
 
-                <div className="space-y-3">
-                  <Label className="text-base font-medium">Update Management</Label>
-                  <p className="text-sm text-muted-foreground">
-                    The application automatically checks for updates every 30 minutes. When an update is available, you'll see a notification in the bottom-right corner.
-                  </p>
-                  
-                  {lastCheckTime && (
-                    <p className="text-xs text-muted-foreground">
-                      Last checked: {lastCheckTime.toLocaleString()}
-                    </p>
-                  )}
-                  
-                  {debugInfo && (
-                    <div className="p-2 bg-muted/30 rounded text-xs text-muted-foreground">
-                      Status: {debugInfo}
-                    </div>
-                  )}
-                  <Button
-                    onClick={checkForUpdate}
-                    disabled={isCheckingForUpdate}
-                    variant="outline"
-                    className="w-full sm:w-auto"
-                  >
-                    {isCheckingForUpdate ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Checking...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        Check for Updates
-                      </>
-                    )}
-                  </Button>
+        <TabsContent value="about" className="m-0">
+          <Section title="Über" icon={Info}>
+            <Row label="Version">
+              <span className="font-mono text-xs tabular-nums">{currentVersion || '—'}</span>
+            </Row>
+            <Row label="Letzte Prüfung">
+              <span className="text-xs text-muted-foreground">
+                {lastCheckTime ? lastCheckTime.toLocaleString() : 'noch nie'}
+              </span>
+            </Row>
 
-                  {lastError && (
-                    <Alert variant="destructive" className="mt-3">
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription className="flex items-center justify-between">
-                        <span>{lastError}</span>
-                        <Button
-                          onClick={clearError}
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 ml-2"
-                        >
-                          Dismiss
-                        </Button>
-                      </AlertDescription>
-                    </Alert>
-                  )}
-                </div>
+            {lastError && (
+              <p className="rounded-md bg-tone-danger-soft px-2 py-1.5 text-xs text-tone-danger">
+                {lastError}
+              </p>
+            )}
 
-                <div className="pt-4 border-t">
-                  <div className="space-y-2">
-                    <Label className="text-base font-medium">Application Info</Label>
-                    <div className="text-sm text-muted-foreground space-y-1">
-                      <p><strong>Name:</strong> Ticketbase Desktop</p>
-                      <p><strong>Built with:</strong> Tauri + React + TypeScript</p>
-                      <p><strong>Update Source:</strong> GitHub Releases</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void checkForUpdate()}
+                disabled={isCheckingForUpdate}
+                className="h-8 gap-1.5 text-xs"
+              >
+                {isCheckingForUpdate ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Auf Updates prüfen
+              </Button>
+              {!isCheckingForUpdate && !lastError && lastCheckTime && (
+                <span className="flex items-center gap-1 text-xs text-tone-success">
+                  <CheckCircle className="h-3.5 w-3.5" /> Aktuell
+                </span>
+              )}
+            </div>
+          </Section>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function Section({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon: typeof User;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="overflow-hidden py-0">
+      <div className="flex items-center gap-1.5 border-b px-3 py-2">
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <h2 className="text-xs font-semibold uppercase tracking-wide">{title}</h2>
+      </div>
+      <div className="space-y-3 p-3">{children}</div>
+    </Card>
+  );
+}
+
+function Row({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid items-center gap-1.5 sm:grid-cols-[160px_minmax(0,320px)] sm:gap-3">
+      <Label htmlFor={htmlFor} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function Toggle({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="min-w-0">
+        <p className="text-xs font-medium">{label}</p>
+        {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
+      </div>
+      <Switch checked={checked} onCheckedChange={onChange} aria-label={label} />
     </div>
   );
 }
