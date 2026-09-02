@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { cache } from '@/lib/cache';
+import { TONE_BADGE, priorityTone } from '@/lib/ticketStatus';
 import { Ticket } from '@/types/api';
 import {
   Calendar,
@@ -32,13 +33,6 @@ export function TodayView({ onTicketSelect }: TodayViewProps) {
     activeTickets: 0,
     completedToday: 0,
   });
-
-  useEffect(() => {
-    if (user) {
-      fetchTodayData();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, [user]);
 
   const fetchTodayData = useCallback(async (forceRefresh = false) => {
     if (!user) return;
@@ -111,16 +105,18 @@ export function TodayView({ onTicketSelect }: TodayViewProps) {
     }
   }, [user]);
 
+  useEffect(() => {
+    if (user) {
+      void fetchTodayData();
+    }
+  }, [user, fetchTodayData]);
+
+
   const formatDateTime = useCallback((dateString: string): string => {
     const date = new Date(dateString);
     return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   }, []);
 
-  const getPriorityColor = useCallback((priority: string, index: number) => {
-    if (priority === 'High' || index > 7) return 'destructive';
-    if (priority === 'Medium' || index > 4) return 'default';
-    return 'secondary';
-  }, []);
 
   const getStatusBadge = useCallback((statusId: number) => {
     const statusMap: Record<number, { label: string; variant: any }> = {
@@ -277,7 +273,7 @@ export function TodayView({ onTicketSelect }: TodayViewProps) {
                             </Badge>
                             {ticket.priority && (
                               <Badge
-                                variant={getPriorityColor(ticket.priority, ticket.index) as any}
+                                variant="outline" className={TONE_BADGE[priorityTone(ticket.priority, ticket.index)]}
                               >
                                 {ticket.priority}
                               </Badge>

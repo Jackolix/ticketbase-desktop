@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAuth } from '@/contexts/AuthContext';
 import { getTicket } from '@/lib/sync';
 import { Ticket } from '@/types/api';
-import { TicketDetailWindow } from './TicketDetailWindow';
+import { TicketDetail } from './TicketDetail';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 interface TicketWindowProps {
   ticketId: string;
@@ -15,7 +16,7 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadTicket = async () => {
+  const loadTicket = useCallback(async () => {
     if (!ticketId) return;
     
     setIsLoadingTicket(true);
@@ -34,14 +35,13 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
     } finally {
       setIsLoadingTicket(false);
     }
-  };
+  }, [ticketId]);
 
   useEffect(() => {
     if (isAuthenticated && ticketId) {
-      loadTicket();
+      void loadTicket();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, [isAuthenticated, ticketId]);
+  }, [isAuthenticated, ticketId, loadTicket]);
 
   if (isLoading || isLoadingTicket) {
     return (
@@ -101,7 +101,9 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
 
   return (
     <div className="min-h-screen bg-background p-4">
-      <TicketDetailWindow ticket={ticket} onBack={handleBack} />
+      <ErrorBoundary label={`ticket #${ticket.id}`} resetKey={ticket.id}>
+        <TicketDetail ticket={ticket} onBack={handleBack} variant="window" />
+      </ErrorBoundary>
     </div>
   );
 }

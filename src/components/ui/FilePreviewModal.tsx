@@ -88,35 +88,51 @@ export function FilePreviewModal({
   const fileInfo = getFileTypeInfo(filename);
   const IconComponent = fileInfo.icon;
 
+  // Loads the preview and owns the object URL it creates.
+  //
+  // The previous version revoked `fileUrl` from the render in which the effect
+  // ran — the *previous* URL, or null on first open — so every preview leaked
+  // the blob it had just created. Tracking it locally means the cleanup always
+  // revokes the URL this run made.
+  const previewable = fileInfo.previewable;
+
   useEffect(() => {
-    if (isOpen && fileInfo.previewable) {
-      loadFilePreview();
-    }
-    return () => {
-      if (fileUrl) {
-        URL.revokeObjectURL(fileUrl);
+    if (!isOpen || !previewable) return;
+
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    const load = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const blob = await apiClient.downloadAttachment(ticketId, filename);
+        if (cancelled) return;
+
+        setFileBlob(blob);
+        objectUrl = URL.createObjectURL(blob);
+        setFileUrl(objectUrl);
+      } catch (err) {
+        console.error('Failed to load file preview:', err);
+        if (!cancelled) {
+          setError('Could not load a preview. You can still download the file.');
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, [isOpen, filename, ticketId]);
 
-  const loadFilePreview = async () => {
-    setIsLoading(true);
-    setError(null);
+    void load();
 
-    try {
-      const blob = await apiClient.downloadAttachment(ticketId, filename);
-      setFileBlob(blob);
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      setFileUrl(null);
+      setFileBlob(null);
+    };
+  }, [isOpen, previewable, ticketId, filename]);
 
-      const url = URL.createObjectURL(blob);
-      setFileUrl(url);
-    } catch (err) {
-      console.error('Failed to load file preview:', err);
-      setError('Failed to load file preview. Please try downloading the file instead.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleRotate = () => setRotation(prev => (prev + 90) % 360);
   const handleReset = () => {

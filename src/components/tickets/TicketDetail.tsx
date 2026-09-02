@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -9,11 +9,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
+import { parseTicketDate } from '@/lib/ticketDate';
+import { TONE_BADGE, priorityTone, statusTone } from '@/lib/ticketStatus';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
 import { TicketPlayerControls } from './TicketPlayerControls';
 import { TicketMessages } from './TicketMessages';
 import { FilePreviewModal } from '@/components/ui/FilePreviewModal';
 import {
+  AlertCircle,
   ArrowLeft,
   Calendar,
   Building,
@@ -31,15 +34,26 @@ import {
   FileText,
   History,
   ListTodo,
-  Eye
+  Eye,
+  X
 } from 'lucide-react';
 
 interface TicketDetailProps {
   ticket: Ticket;
   onBack: () => void;
+  /**
+   * `embedded` renders inside the main window: a back arrow, and a button to
+   * pop the ticket out. `window` renders as its own window: a close button, and
+   * no pop-out, since it already is one.
+   *
+   * This replaced a separate TicketDetailWindow component — a near-identical
+   * fork that had drifted, losing file preview and the manual time field. Every
+   * fix had to be made twice and in practice wasn't.
+   */
+  variant?: 'embedded' | 'window';
 }
 
-export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
+export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDetailProps) {
   const { user } = useAuth();
   const [ticketHistory, setTicketHistory] = useState<TicketHistory[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -52,6 +66,7 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
   const [isAddingHistory, setIsAddingHistory] = useState(false);
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
   const [previewFile, setPreviewFile] = useState<{ filename: string; ticketId: number } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const handleOpenInNewWindow = async () => {
     try {
@@ -61,26 +76,22 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     }
   };
 
-  useEffect(() => {
-    fetchTicketData();
-    fetchTodos();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, [ticket.id]);
-
-  const fetchTicketData = async () => {
+  const fetchTicketData = useCallback(async () => {
     try {
       const response = await apiClient.getTicketData(ticket.id);
       if (response.status === 'success' && response.ticket_data) {
         setTicketHistory(response.ticket_data);
+        setLoadError(null);
       }
     } catch (error) {
       console.error('Failed to fetch ticket data:', error);
+      setLoadError('Could not load this ticket’s history.');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [ticket.id]);
 
-  const fetchTodos = async () => {
+  const fetchTodos = useCallback(async () => {
     try {
       const response = await apiClient.getCheckList(ticket.id);
       if (response.status === 'success' && response.check_list) {
@@ -89,7 +100,13 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     } catch (error) {
       console.error('Failed to fetch todos:', error);
     }
-  };
+  }, [ticket.id]);
+
+  useEffect(() => {
+    setIsLoading(true);
+    void fetchTicketData();
+    void fetchTodos();
+  }, [fetchTicketData, fetchTodos]);
 
   const handleAddTodo = async () => {
     if (!user || !newTodo.trim()) return;
@@ -158,56 +175,12 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     }
   };
 
-  const getPriorityColor = (priority: string, index: number) => {
-    if (priority === 'High' || index > 7) return 'destructive';
-    if (priority === 'Medium' || index > 4) return 'default';
-    return 'secondary';
-  };
 
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'new': return 'default';
-      case 'in progress': return 'secondary';
-      case 'closed': return 'outline';
-      default: return 'secondary';
-    }
-  };
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'No date';
-    try {
-      // Handle DD-MM-YYYY HH:mm format
-      const match = dateString.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
-      if (match) {
-        const [, day, month, year, hour, minute] = match;
-        const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(minute));
-        if (!isNaN(date.getTime())) {
-          return date.toLocaleString();
-        }
-      }
-
-      // Handle DD-MM-YYYY format without time
-      const matchWithoutTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-      if (matchWithoutTime) {
-        const [, day, month, year] = matchWithoutTime;
-        const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-        if (!isNaN(date.getTime())) {
-          return date.toLocaleDateString(undefined, {
-            month: 'short',
-            day: 'numeric'
-          });
-        }
-      }
-
-      // Fallback to standard date parsing
-      const date = new Date(dateString);
-      if (!isNaN(date.getTime())) {
-        return date.toLocaleString();
-      }
-      return 'Invalid Date';
-    } catch {
-      return 'Invalid Date';
-    }
+    const parsed = parseTicketDate(dateString);
+    return parsed ? parsed.toLocaleString() : 'Invalid Date';
   };
 
   const decodeHtmlEntities = (text: string) => {
@@ -297,15 +270,17 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="outline" size="icon" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+        {variant === 'embedded' && (
+          <Button variant="outline" size="icon" onClick={onBack} aria-label="Back to tickets">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        )}
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
-            <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
+            <Badge variant="outline" className={TONE_BADGE[priorityTone(ticket.priority, ticket.index)]}>
               #{ticket.id}
             </Badge>
-            <Badge variant={getStatusColor(ticket.status)}>
+            <Badge variant="outline" className={TONE_BADGE[statusTone(ticket.status)]}>
               {safeRender(ticket.status)}
             </Badge>
             {ticket.priority && (
@@ -317,9 +292,26 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
           <h1 className="text-2xl font-bold">{safeRender(ticket.summary)}</h1>
           <p className="text-muted-foreground">{safeRender(ticket.subject)}</p>
         </div>
-        <Button variant="outline" size="icon" onClick={handleOpenInNewWindow}>
-          <ExternalLink className="h-4 w-4" />
-        </Button>
+        {variant === 'embedded' ? (
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={handleOpenInNewWindow}
+            aria-label="Open in a new window"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onBack}
+            aria-label="Close window"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -561,7 +553,20 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                       )}
                     </Card>
                   ))}
-                  {ticketHistory.length === 0 && (
+                  {/* A failed load and a genuinely empty history used to look
+                      identical — both rendered "No history entries yet". */}
+                  {ticketHistory.length === 0 && loadError && (
+                    <Card className="border-destructive/40">
+                      <CardContent className="p-8 text-center space-y-3">
+                        <AlertCircle className="h-10 w-10 text-destructive mx-auto" />
+                        <p className="text-sm text-muted-foreground">{loadError}</p>
+                        <Button variant="outline" size="sm" onClick={() => void fetchTicketData()}>
+                          Try again
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  )}
+                  {ticketHistory.length === 0 && !loadError && (
                     <Card>
                       <CardContent className="p-8 text-center">
                         <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />

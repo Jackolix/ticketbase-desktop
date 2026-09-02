@@ -14,6 +14,7 @@ import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
 import { getTicket } from '@/lib/sync';
 import { parseTicketDate } from '@/lib/ticketDate';
+import { TONE_BADGE, priorityTone, statusTone } from '@/lib/ticketStatus';
 import { isRunning, toPlayerState } from '@/lib/playerStatus';
 import { Ticket, Company } from '@/types/api';
 import type { TicketSort } from '@/lib/sync';
@@ -330,24 +331,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     return () => clearTimeout(timeoutId);
   }, [filterState.searchTerm, tickets]);
 
-  const getPriorityColor = (priority: string, index: number) => {
-    if (priority === 'VERY_HIGH' || index > 7) return 'destructive';
-    if (priority === 'HIGH' || index > 4) return 'default';
-    if (priority === 'NORMAL') return 'secondary';
-    return 'secondary';
-  };
 
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'neu': return 'default';
-      case 'ausstehend': return 'secondary';
-      case 'warten auf rückmeldung vom ticketbenutzer': return 'destructive';
-      case 'warten auf rückmeldung (extern)': return 'destructive';
-      case 'terminiert': return 'secondary';
-      case 'abgeschlossen': return 'outline';
-      default: return 'secondary';
-    }
-  };
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'No date';
@@ -432,10 +416,10 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         {/* Header Section */}
         <div className="space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
+            <Badge variant="outline" className={TONE_BADGE[priorityTone(ticket.priority, ticket.index)]}>
               #{ticket.id}
             </Badge>
-            <Badge variant={getStatusColor(ticket.status)}>
+            <Badge variant="outline" className={TONE_BADGE[statusTone(ticket.status)]}>
               {ticket.status}
             </Badge>
             {ticket.priority && (
@@ -608,10 +592,10 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
           <CardContent className="p-3">
         <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
+            <Badge variant="outline" className={TONE_BADGE[priorityTone(ticket.priority, ticket.index)]}>
               #{ticket.id}
             </Badge>
-            <Badge variant={getStatusColor(ticket.status)}>
+            <Badge variant="outline" className={TONE_BADGE[statusTone(ticket.status)]}>
               {ticket.status}
             </Badge>
             {ticket.priority && (

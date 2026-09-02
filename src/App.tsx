@@ -29,6 +29,8 @@ import {
 import { Ticket } from "./types/api";
 import { getTicket } from "./lib/sync";
 import { WindowManager } from "./lib/windowManager";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { SyncIndicator } from "./components/SyncIndicator";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -231,9 +233,17 @@ function AppContent() {
               </BreadcrumbList>
             </Breadcrumb>
           </div>
+          <div className="ml-auto px-4">
+            <SyncIndicator />
+          </div>
         </header>
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-          {renderContent()}
+          <ErrorBoundary
+            label={selectedTicket ? `ticket #${selectedTicket.id}` : getBreadcrumbTitle().toLowerCase()}
+            resetKey={selectedTicket ? `ticket-${selectedTicket.id}` : currentView}
+          >
+            {renderContent()}
+          </ErrorBoundary>
         </div>
       </SidebarInset>
       <UpdateNotification />

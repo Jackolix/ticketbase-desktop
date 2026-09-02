@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -52,12 +52,7 @@ export function Settings() {
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
-  useEffect(() => {
-    fetchMailSettings();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, [user]);
-
-  const fetchMailSettings = async () => {
+  const fetchMailSettings = useCallback(async () => {
     if (!user) return;
     
     try {
@@ -73,7 +68,11 @@ export function Settings() {
     } catch (error) {
       console.error('Failed to fetch mail settings:', error);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    void fetchMailSettings();
+  }, [fetchMailSettings]);
 
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

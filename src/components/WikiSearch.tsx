@@ -28,11 +28,6 @@ export function WikiSearch() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedArticle, setSelectedArticle] = useState<WikiArticle | null>(null);
 
-  useEffect(() => {
-    fetchWikiData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, []);
-
   // Debounced search query update
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -115,6 +110,11 @@ export function WikiSearch() {
       setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    void fetchWikiData();
+  }, [fetchWikiData]);
+
 
   const highlightText = useCallback((text: string, query: string) => {
     if (!query) return text;

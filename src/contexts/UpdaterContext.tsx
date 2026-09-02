@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { check, Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
@@ -48,9 +48,18 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   const [lastCheckTime, setLastCheckTime] = useState<Date | null>(null);
   const [debugInfo, setDebugInfo] = useState('');
 
-  // Refs to access latest state in event handlers
+  // Refs to access latest state in event handlers and long-lived intervals.
+  //
+  // The periodic check runs on an interval created once, so anything it reads
+  // from state directly would be frozen at its first-render value. That was a
+  // live bug: `availableUpdate` was permanently null inside the closure, so the
+  // version comparison always passed and the same update was re-downloaded
+  // every 30 minutes.
   const updateRef = useRef<Update | null>(null);
   const isUpdateDownloadedRef = useRef(false);
+  const isCheckingRef = useRef(false);
+  const isDownloadingRef = useRef(false);
+  const isInstallingRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -60,6 +69,18 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   useEffect(() => {
     isUpdateDownloadedRef.current = isUpdateDownloaded;
   }, [isUpdateDownloaded]);
+
+  useEffect(() => {
+    isCheckingRef.current = isCheckingForUpdate;
+  }, [isCheckingForUpdate]);
+
+  useEffect(() => {
+    isDownloadingRef.current = isDownloading;
+  }, [isDownloading]);
+
+  useEffect(() => {
+    isInstallingRef.current = isInstalling;
+  }, [isInstalling]);
 
   // Get current app version on mount
   useEffect(() => {
@@ -77,8 +98,8 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
   }, []);
 
   // Auto-download update in background
-  const autoDownloadUpdate = async (update: Update) => {
-    if (isDownloading || isUpdateDownloaded) return;
+  const autoDownloadUpdate = useCallback(async (update: Update) => {
+    if (isDownloadingRef.current || isUpdateDownloadedRef.current) return;
 
     try {
       console.log('Auto-downloading update in background...');
@@ -115,19 +136,20 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
     } finally {
       setIsDownloading(false);
     }
-  };
+  }, []);
 
   // Check for updates periodically (every 30 minutes)
   useEffect(() => {
     const checkForUpdates = async () => {
-      if (isCheckingForUpdate || isInstalling) return;
+      if (isCheckingRef.current || isInstallingRef.current) return;
 
       try {
         setIsCheckingForUpdate(true);
         setLastError(null);
         const update = await check();
 
-        if (update && (!availableUpdate || update.version !== availableUpdate.version)) {
+        const known = updateRef.current;
+        if (update && (!known || update.version !== known.version)) {
           console.log('Update available:', update.version);
           setAvailableUpdate(update);
           setIsUpdateDownloaded(false);
@@ -160,8 +182,7 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
       const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
       return () => clearInterval(interval);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 03. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, []); // Remove dependencies to prevent infinite loops
+  }, [autoDownloadUpdate]);
 
   // Install a downloaded update when the app is closed.
   //

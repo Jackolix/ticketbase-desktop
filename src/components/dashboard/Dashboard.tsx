@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { onSyncChanged, queryTickets } from '@/lib/sync';
 import { compareTicketDates } from '@/lib/ticketDate';
+import { TONE_BADGE, priorityTone, statusTone } from '@/lib/ticketStatus';
 import { Ticket } from '@/types/api';
 import {
   Ticket as TicketIcon,
@@ -102,20 +103,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
     [tickets]
   );
 
-  const getPriorityColor = useCallback((priority: string, index: number) => {
-    if (priority === 'High' || index > 7) return 'destructive';
-    if (priority === 'Medium' || index > 4) return 'default';
-    return 'secondary';
-  }, []);
 
-  const getStatusColor = useCallback((status: string) => {
-    switch (status.toLowerCase()) {
-      case 'new': return 'default';
-      case 'in progress': return 'secondary';
-      case 'closed': return 'outline';
-      default: return 'secondary';
-    }
-  }, []);
 
   if (isLoading) {
     return (
@@ -209,10 +197,10 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
               <div key={ticket.id} className="flex items-center justify-between p-3 border rounded-lg">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
+                    <Badge variant="outline" className={TONE_BADGE[priorityTone(ticket.priority, ticket.index)]}>
                       #{ticket.id}
                     </Badge>
-                    <Badge variant={getStatusColor(ticket.status)}>
+                    <Badge variant="outline" className={TONE_BADGE[statusTone(ticket.status)]}>
                       {ticket.status}
                     </Badge>
                   </div>
@@ -257,7 +245,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
               <div key={ticket.id} className="flex items-center justify-between p-3 border rounded-lg">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <Badge variant={getPriorityColor(ticket.priority, ticket.index)}>
+                    <Badge variant="outline" className={TONE_BADGE[priorityTone(ticket.priority, ticket.index)]}>
                       #{ticket.id}
                     </Badge>
                     <Badge variant="default">New</Badge>
@@ -315,7 +303,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <Badge variant="outline">#{activity.ticket.id}</Badge>
-                    <Badge variant={getStatusColor(activity.ticket.status)}>
+                    <Badge variant="outline" className={TONE_BADGE[statusTone(activity.ticket.status)]}>
                       {activity.ticket.status}
                     </Badge>
                   </div>
