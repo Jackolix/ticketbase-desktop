@@ -68,10 +68,8 @@ export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
   const sessionStorageUsage = (() => {
     try {
       let total = 0;
-      for (let key in sessionStorage) {
-        if (sessionStorage.hasOwnProperty(key)) {
-          total += sessionStorage[key].length + key.length;
-        }
+      for (const key of Object.keys(sessionStorage)) {
+        total += sessionStorage[key].length + key.length;
       }
       return total;
     } catch {

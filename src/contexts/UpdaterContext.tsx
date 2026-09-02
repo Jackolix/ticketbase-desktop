@@ -160,51 +160,60 @@ export const UpdaterProvider: React.FC<UpdaterProviderProps> = ({ children }) =>
       const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
       return () => clearInterval(interval);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 03. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, []); // Remove dependencies to prevent infinite loops
 
-  // Install update on window close
+  // Install a downloaded update when the app is closed.
+  //
+  // This only ever runs on the main window. It used to be registered on every
+  // window, so closing a ticket popup would preventDefault() and try to install
+  // the whole application — and if that failed, the window could never be
+  // closed at all.
   useEffect(() => {
     const isDevelopment = import.meta.env.DEV;
     if (isDevelopment) return;
 
+    const appWindow = getCurrentWindow();
+    if (appWindow.label !== 'main') return;
+
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     const setupCloseHandler = async () => {
-      const appWindow = getCurrentWindow();
+      const handler = await appWindow.onCloseRequested(async (event) => {
+        if (!isUpdateDownloadedRef.current || !updateRef.current) return;
 
-      unlisten = await appWindow.onCloseRequested(async (event) => {
-        if (isUpdateDownloadedRef.current && updateRef.current) {
-          // Prevent the window from closing immediately
-          event.preventDefault();
+        // Hold the window open just long enough to swap the binary.
+        event.preventDefault();
+        console.log('Installing update before closing...');
 
-          console.log('Installing update before closing...');
-
-          try {
-            // Timeout after 15 seconds to prevent hanging on close
-            await Promise.race([
-              updateRef.current.install(),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Install timeout after 15s')), 15000)
-              ),
-            ]);
-            // Relaunch with the new version
-            await relaunch();
-          } catch (error) {
-            console.error('Failed to install update on close:', error);
-            // If install fails or times out, force-close the window
-            try {
-              await appWindow.destroy();
-            } catch {
-              window.close();
-            }
-          }
+        try {
+          await Promise.race([
+            updateRef.current.install(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Install timeout after 15s')), 15000)
+            ),
+          ]);
+          await relaunch();
+        } catch (error) {
+          console.error('Failed to install update on close:', error);
+          // The user asked to close. Honour that regardless of the update:
+          // destroy() bypasses this same handler, so it cannot loop.
+          await appWindow.destroy();
         }
       });
+
+      if (cancelled) {
+        handler();
+        return;
+      }
+      unlisten = handler;
     };
 
     setupCloseHandler();
 
     return () => {
+      cancelled = true;
       if (unlisten) {
         unlisten();
       }

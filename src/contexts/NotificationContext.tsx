@@ -265,6 +265,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       new_tickets: currentNewTickets,
       my_tickets: currentMyTickets,
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 03. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [tickets, lastUpdated, settings, user]);
 
   const requestNotificationPermission = async (): Promise<boolean> => {

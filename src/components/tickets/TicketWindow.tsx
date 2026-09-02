@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
+import { transformTicketById } from '@/lib/ticketTransform';
 import { Ticket } from '@/types/api';
 import { TicketDetailWindow } from './TicketDetailWindow';
 
@@ -25,40 +27,7 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
       if (response.result === 'success' && response.tickets) {
         const rawTicket = response.tickets;
         
-        const transformedTicket: Ticket = {
-          id: rawTicket.id,
-          description: rawTicket.description || '',
-          status: rawTicket.status?.name || '',
-          status_id: rawTicket.status_id || 0,
-          summary: rawTicket.summary || '',
-          ticketCreator: rawTicket.userone?.name || '',
-          ticketUser: rawTicket.ticketuser?.name || '',
-          ticketUserPhone: rawTicket.ticketuser?.phone || '',
-          ticketTerminatedUser: '',
-          attachments: [],
-          subject: rawTicket.servicedetail?.name || '',
-          priority: rawTicket.priority || '',
-          index: rawTicket.priority_index || 0,
-          my_ticket_id: rawTicket.my_ticket_id || 0,
-          location_id: rawTicket.location_id || 0,
-          company: {
-            id: rawTicket.companyone?.id || 0,
-            name: rawTicket.companyone?.name || '',
-            number: rawTicket.companyone?.number || '',
-            companyMail: rawTicket.companyone?.email || '',
-            companyPhone: rawTicket.companyone?.phone || '',
-            companyZip: rawTicket.companyone?.zip || '',
-            companyAdress: rawTicket.companyone?.address || '',
-          },
-          dyn_template_id: rawTicket.dyn_template_id || 0,
-          created_at: rawTicket.created_at || '',
-          ticket_start: '',
-          ticketMessagesCount: 0,
-          template_data: rawTicket.template_data || '',
-          pool_name: '',
-        };
-        
-        setTicket(transformedTicket);
+        setTicket(transformTicketById(rawTicket));
       } else {
         setError('Ticket not found');
       }
@@ -74,6 +43,7 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
     if (isAuthenticated && ticketId) {
       loadTicket();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [isAuthenticated, ticketId]);
 
   if (isLoading || isLoadingTicket) {
@@ -121,10 +91,15 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
     );
   }
 
-  // Don't show the back button in ticket windows
+  // Ticket windows close themselves instead of navigating back.
+  //
+  // This must go through Tauri rather than the DOM's window.close(), which does
+  // not route through the window system at all and is a no-op on WKWebView and
+  // WebKitGTK.
   const handleBack = () => {
-    // In ticket window, we can close the window instead
-    window.close();
+    getCurrentWindow().close().catch((err) => {
+      console.error('Failed to close ticket window:', err);
+    });
   };
 
   return (

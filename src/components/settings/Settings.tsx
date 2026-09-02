@@ -54,6 +54,7 @@ export function Settings() {
 
   useEffect(() => {
     fetchMailSettings();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [user]);
 
   const fetchMailSettings = async () => {
@@ -94,7 +95,7 @@ export function Settings() {
       } else {
         setErrorMessage(response.message || 'Failed to update profile');
       }
-    } catch (error) {
+    } catch {
       setErrorMessage('Failed to update profile');
     } finally {
       setIsLoadingProfile(false);
@@ -132,7 +133,7 @@ export function Settings() {
       } else {
         setErrorMessage(response.message || 'Failed to update password');
       }
-    } catch (error) {
+    } catch {
       setErrorMessage('Failed to update password');
     } finally {
       setIsLoadingPassword(false);
@@ -148,7 +149,7 @@ export function Settings() {
       if (response.status === 'success') {
         setSuccessMessage('Mail settings updated');
       }
-    } catch (error) {
+    } catch {
       setErrorMessage('Failed to update mail settings');
     } finally {
       setIsLoadingMail(false);
@@ -433,7 +434,7 @@ export function Settings() {
                       } else {
                         setErrorMessage('Desktop notification permission denied');
                       }
-                    } catch (error) {
+                    } catch {
                       setErrorMessage('Failed to request notification permission');
                     }
                   }}

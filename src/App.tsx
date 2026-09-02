@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import "./App.css";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider, useTickets } from "./contexts/TicketsContext";
@@ -29,6 +28,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Ticket } from "./types/api";
 import { apiClient } from "./lib/api";
+import { transformTicketById } from "./lib/ticketTransform";
 import { WindowManager } from "./lib/windowManager";
 
 function AppContent() {
@@ -94,39 +94,8 @@ function AppContent() {
       if (response.result === 'success' && response.tickets) {
         const rawTicket = response.tickets;
         
-        const transformedTicket: Ticket = {
-          id: rawTicket.id,
-          description: rawTicket.description || '',
-          status: rawTicket.status?.name || '',
-          status_id: rawTicket.status_id || 0,
-          summary: rawTicket.summary || '',
-          ticketCreator: rawTicket.userone?.name || '',
-          ticketUser: rawTicket.ticketuser?.name || '',
-          ticketUserPhone: rawTicket.ticketuser?.phone || '',
-          ticketTerminatedUser: '',
-          attachments: [],
-          subject: rawTicket.servicedetail?.name || '',
-          priority: rawTicket.priority || '',
-          index: rawTicket.priority_index || 0,
-          my_ticket_id: rawTicket.my_ticket_id || 0,
-          location_id: rawTicket.location_id || 0,
-          company: {
-            id: rawTicket.companyone?.id || 0,
-            name: rawTicket.companyone?.name || '',
-            number: rawTicket.companyone?.number || '',
-            companyMail: rawTicket.companyone?.email || '',
-            companyPhone: rawTicket.companyone?.phone || '',
-            companyZip: rawTicket.companyone?.zip || '',
-            companyAdress: rawTicket.companyone?.address || '',
-          },
-          dyn_template_id: rawTicket.dyn_template_id || 0,
-          created_at: rawTicket.created_at || '',
-          ticket_start: '',
-          ticketMessagesCount: 0,
-          template_data: rawTicket.template_data || '',
-          pool_name: '',
-        };
-        
+        const transformedTicket = transformTicketById(rawTicket);
+
         setSelectedTicket(transformedTicket);
         setCurrentView("tickets");
       } else {

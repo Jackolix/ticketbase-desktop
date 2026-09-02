@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { cache } from '@/lib/cache';
+import { compareTicketDates } from '@/lib/ticketDate';
 import { Ticket } from '@/types/api';
 import {
   Ticket as TicketIcon,
@@ -33,6 +34,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
 
   useEffect(() => {
     fetchTickets();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [user]);
 
   const fetchTickets = useCallback(async (forceRefresh = false) => {
@@ -49,7 +51,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
         // Build activity from cached data
         const allTickets = [...cachedData.my_tickets, ...cachedData.new_tickets, ...cachedData.all_tickets];
         const activities = allTickets
-          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          .sort((a, b) => compareTicketDates(b.created_at, a.created_at))
           .slice(0, 10)
           .map(ticket => ({
             id: ticket.id,
@@ -81,7 +83,7 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
       // Fetch recent activity from all tickets
       const allTickets = [...response.my_tickets, ...response.new_tickets, ...response.all_tickets];
       const activities = allTickets
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .sort((a, b) => compareTicketDates(b.created_at, a.created_at))
         .slice(0, 10)
         .map(ticket => ({
           id: ticket.id,

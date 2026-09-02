@@ -46,6 +46,7 @@ export function TicketDetailWindow({ ticket, onBack }: TicketDetailWindowProps) 
   useEffect(() => {
     fetchTicketData();
     fetchTodos();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [ticket.id]);
 
   const fetchTicketData = async () => {

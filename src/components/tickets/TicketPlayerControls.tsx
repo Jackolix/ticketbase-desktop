@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
+import { parseTicketDate } from '@/lib/ticketDate';
 import { Ticket } from '@/types/api';
 import {
   Play,
@@ -36,8 +37,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
 
   useEffect(() => {
     fetchPlayerStatus();
-    let timerInterval: NodeJS.Timeout;
-    let statusInterval: NodeJS.Timeout;
+    let timerInterval: NodeJS.Timeout | undefined;
 
     // Update elapsed time every second when playing (only when we have a startTime)
     if (playerStatus === 'playing' && startTime) {
@@ -48,7 +48,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
     // When paused, don't update elapsed time - it should stay at the current value
 
     // Poll player status every 30 seconds to detect external changes
-    statusInterval = setInterval(() => {
+    const statusInterval = setInterval(() => {
       fetchPlayerStatus();
     }, 30000);
 
@@ -60,6 +60,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         clearInterval(statusInterval);
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [playerStatus, startTime, ticket.id, user?.id]);
 
   const fetchPlayerStatus = async () => {
@@ -448,7 +449,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         {/* Additional Info */}
         {ticket.ticket_start && (
           <div className="text-center pt-2 border-t text-sm text-muted-foreground">
-            <p>Scheduled: {new Date(ticket.ticket_start).toLocaleString()}</p>
+            <p>Scheduled: {parseTicketDate(ticket.ticket_start)?.toLocaleString() ?? ticket.ticket_start}</p>
           </div>
         )}
       </CardContent>

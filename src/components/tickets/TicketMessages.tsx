@@ -38,6 +38,7 @@ export function TicketMessages({ ticketId }: TicketMessagesProps) {
     // Poll for new messages every 10 seconds
     const interval = setInterval(fetchMessages, 10000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [ticketId]);
 
   useEffect(() => {

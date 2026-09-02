@@ -62,7 +62,7 @@ class ApiClient {
       try {
         errorBody = await response.text();
         console.error('❌ Server error response body:', errorBody);
-      } catch (e) {
+      } catch {
         console.error('Could not read error response body');
       }
       throw new Error(`HTTP error! status: ${response.status}${errorBody ? ' - ' + errorBody.substring(0, 500) : ''}`);
@@ -320,7 +320,7 @@ class ApiClient {
           errorText = await response.text();
           console.error('Server error response:', errorText);
           console.error('Response headers:', Object.fromEntries(response.headers.entries()));
-        } catch (e) {
+        } catch {
           console.error('Could not read error response');
         }
         throw new Error(`HTTP error! status: ${response.status} - ${errorText.substring(0, 200)}`);

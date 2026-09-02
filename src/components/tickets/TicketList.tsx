@@ -12,6 +12,8 @@ import { useTickets } from '@/contexts/TicketsContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
+import { transformTicketById } from '@/lib/ticketTransform';
+import { compareTicketDates, parseTicketDate } from '@/lib/ticketDate';
 import { Ticket, Company } from '@/types/api';
 import { usePerformanceMonitor } from '@/utils/performanceMonitor';
 import {
@@ -210,31 +212,6 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     [customers, filterState.customerSearchTerm]
   );
 
-  // Helper function to parse DD-MM-YYYY format dates
-  const parseTicketDate = (dateString: string): Date | null => {
-    if (!dateString) return null;
-    
-    // Handle DD-MM-YYYY HH:mm format
-    const matchWithTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
-    if (matchWithTime) {
-      const [, day, month, year, hour, minute] = matchWithTime;
-      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(minute));
-      if (!isNaN(date.getTime())) return date;
-    }
-
-    // Handle DD-MM-YYYY format without time
-    const matchWithoutTime = dateString.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-    if (matchWithoutTime) {
-      const [, day, month, year] = matchWithoutTime;
-      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-      if (!isNaN(date.getTime())) return date;
-    }
-
-    // Fallback to standard date parsing
-    const date = new Date(dateString);
-    return isNaN(date.getTime()) ? null : date;
-  };
-
   // Get effective description from ticket (description or template_data)
   const getTicketDescription = (ticket: Ticket) => {
     if (ticket.description && ticket.description.trim()) {
@@ -268,40 +245,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
       if (response.result === 'success' && response.tickets) {
         const rawTicket = response.tickets;
 
-        const transformedTicket: Ticket = {
-          id: rawTicket.id,
-          description: rawTicket.description || '',
-          status: rawTicket.status?.name || '',
-          status_id: rawTicket.status_id || 0,
-          summary: rawTicket.summary || '',
-          ticketCreator: rawTicket.userone?.name || '',
-          ticketUser: rawTicket.ticketuser?.name || '',
-          ticketUserPhone: rawTicket.ticketuser?.phone || '',
-          ticketTerminatedUser: '',
-          attachments: [],
-          subject: rawTicket.servicedetail?.name || '',
-          priority: rawTicket.priority || '',
-          index: rawTicket.priority_index || 0,
-          my_ticket_id: rawTicket.my_ticket_id || 0,
-          location_id: rawTicket.location_id || 0,
-          company: {
-            id: rawTicket.companyone?.id || 0,
-            name: rawTicket.companyone?.name || '',
-            number: rawTicket.companyone?.number || '',
-            companyMail: rawTicket.companyone?.email || '',
-            companyPhone: rawTicket.companyone?.phone || '',
-            companyZip: rawTicket.companyone?.zip || '',
-            companyAdress: rawTicket.companyone?.address || '',
-          },
-          dyn_template_id: rawTicket.dyn_template_id || 0,
-          created_at: rawTicket.created_at || '',
-          ticket_start: '',
-          ticketMessagesCount: 0,
-          template_data: rawTicket.template_data || '',
-          pool_name: '',
-        };
-
-        setSearchedTicket(transformedTicket);
+        setSearchedTicket(transformTicketById(rawTicket));
       } else {
         setSearchedTicket(null);
       }
@@ -378,9 +322,9 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
     const sorted = [...ticketList].sort((a, b) => {
       switch (filterState.sortBy) {
         case 'date-desc':
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+          return compareTicketDates(b.created_at, a.created_at);
         case 'date-asc':
-          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+          return compareTicketDates(a.created_at, b.created_at);
         case 'priority-high':
           return b.index - a.index;
         case 'priority-low':
@@ -398,7 +342,7 @@ export function TicketList({ onTicketSelect }: TicketListProps) {
         case 'status-desc':
           return b.status.localeCompare(a.status);
         default:
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+          return compareTicketDates(b.created_at, a.created_at);
       }
     });
     return sorted;

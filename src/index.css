@@ -119,6 +119,16 @@
   }
   body {
     @apply bg-background text-foreground;
+
+    /* Carried over from the deleted App.css, which was Vite scaffolding. The
+       rest of that file styled bare `input`, `button`, `a` and `h1` elements
+       with hardcoded colours, overriding the shadcn components, and swapped
+       those colours on prefers-color-scheme — which fought this app's own
+       .dark class. Only the text rendering was worth keeping. */
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 

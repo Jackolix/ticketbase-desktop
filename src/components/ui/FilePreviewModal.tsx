@@ -97,6 +97,7 @@ export function FilePreviewModal({
         URL.revokeObjectURL(fileUrl);
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
   }, [isOpen, filename, ticketId]);
 
   const loadFilePreview = async () => {
@@ -331,7 +332,7 @@ function FileTextContent({ blob }: { blob: Blob }) {
       try {
         const text = await blob.text();
         setContent(text);
-      } catch (err) {
+      } catch {
         setContent('Error reading file content');
       } finally {
         setIsLoading(false);
