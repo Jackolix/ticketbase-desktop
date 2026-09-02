@@ -5,6 +5,7 @@ import { getTicket } from '@/lib/sync';
 import { Ticket } from '@/types/api';
 import { TicketDetail } from './TicketDetail';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { Titlebar } from '@/components/Titlebar';
 
 interface TicketWindowProps {
   ticketId: string;
@@ -45,46 +46,58 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
 
   if (isLoading || isLoadingTicket) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <Titlebar title={`Ticket #${ticketId}`} />
+      <div className="flex flex-1 items-center justify-center p-4">
         <div className="text-center space-y-4">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center mx-auto animate-pulse">
             <div className="w-4 h-4 bg-primary-foreground rounded" />
           </div>
           <p className="text-muted-foreground">
-            {isLoadingTicket ? "Loading ticket..." : "Loading..."}
+            {isLoadingTicket ? "Loading ticket…" : "Loading…"}
           </p>
         </div>
       </div>
+    </div>
     );
   }
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <Titlebar title={`Ticket #${ticketId}`} />
+      <div className="flex flex-1 items-center justify-center p-4">
         <div className="text-center space-y-4">
           <p className="text-muted-foreground">Please authenticate to view this ticket.</p>
         </div>
       </div>
+    </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <Titlebar title={`Ticket #${ticketId}`} />
+      <div className="flex flex-1 items-center justify-center p-4">
         <div className="text-center space-y-4">
           <p className="text-destructive">{error}</p>
         </div>
       </div>
+    </div>
     );
   }
 
   if (!ticket) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <Titlebar title={`Ticket #${ticketId}`} />
+      <div className="flex flex-1 items-center justify-center p-4">
         <div className="text-center space-y-4">
           <p className="text-muted-foreground">Ticket not found</p>
         </div>
       </div>
+    </div>
     );
   }
 
@@ -100,10 +113,13 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background p-4">
-      <ErrorBoundary label={`ticket #${ticket.id}`} resetKey={ticket.id}>
-        <TicketDetail ticket={ticket} onBack={handleBack} variant="window" />
-      </ErrorBoundary>
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <Titlebar title={`Ticket #${ticket.id}`} />
+      <div className="flex-1 overflow-auto p-4">
+        <ErrorBoundary label={`ticket #${ticket.id}`} resetKey={ticket.id}>
+          <TicketDetail ticket={ticket} onBack={handleBack} variant="window" />
+        </ErrorBoundary>
+      </div>
     </div>
   );
 }

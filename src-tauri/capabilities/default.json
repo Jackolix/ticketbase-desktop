@@ -15,6 +15,7 @@
     "core:window:allow-unmaximize",
     "core:window:allow-hide",
     "core:window:allow-show",
+    "core:window:allow-start-dragging",
     "opener:default",
     "notification:default",
     "notification:allow-request-permission",

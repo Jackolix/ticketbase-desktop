@@ -127,11 +127,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           }],
         }]);
 
-        // Listen for notification clicks — open the related ticket window
+        // Clicking a notification brings the app forward and shows the ticket.
+        //
+        // This used to spawn a new ticket window, which left the user with a
+        // window to close and did nothing to raise the app if it was minimised
+        // or behind something. show_ticket raises an already-open window for
+        // that ticket if there is one, and otherwise raises the main window and
+        // navigates it.
         unlistenAction = await onAction((action: any) => {
-          const ticketId = action.notification?.extra?.ticketId;
-          if (ticketId) {
-            invoke('open_ticket_window', { ticketId: parseInt(ticketId) }).catch(console.error);
+          const raw = action.notification?.extra?.ticketId;
+          const ticketId = typeof raw === 'string' ? parseInt(raw, 10) : Number(raw);
+          if (Number.isFinite(ticketId) && ticketId > 0) {
+            invoke('show_ticket', { ticketId }).catch(console.error);
           }
         });
       } catch (error) {

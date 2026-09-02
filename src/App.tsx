@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider, useTickets } from "./contexts/TicketsContext";
@@ -31,6 +32,7 @@ import { getTicket } from "./lib/sync";
 import { WindowManager } from "./lib/windowManager";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SyncIndicator } from "./components/SyncIndicator";
+import { Titlebar } from "./components/Titlebar";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -39,31 +41,6 @@ function AppContent() {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
-
-  // Check URL for ticket routing on mount and cleanup temp files
-  useEffect(() => {
-    const checkUrlForTicket = () => {
-      const hash = window.location.hash;
-      const ticketMatch = hash.match(/^#\/ticket\/(\d+)$/);
-
-      if (ticketMatch) {
-        const ticketId = parseInt(ticketMatch[1], 10);
-        loadTicketById(ticketId);
-        return;
-      }
-
-      // Default to dashboard if no specific route
-      setCurrentView("dashboard");
-      setSelectedTicket(null);
-    };
-
-    if (isAuthenticated) {
-      checkUrlForTicket();
-
-      // Clean up old temp files on app startup
-      WindowManager.cleanupOldTempFiles();
-    }
-  }, [isAuthenticated]);
 
   // Debug panel keyboard shortcut (Ctrl+Shift+D)
   useEffect(() => {
@@ -88,7 +65,7 @@ function AppContent() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  const loadTicketById = async (ticketId: number) => {
+  const loadTicketById = useCallback(async (ticketId: number) => {
     setIsLoadingTicket(true);
     try {
       // Served from the local store when the ticket has been synced, which is
@@ -112,7 +89,40 @@ function AppContent() {
     } finally {
       setIsLoadingTicket(false);
     }
-  };
+  }, []);
+
+  // Check URL for ticket routing on mount, and clean up old temp files.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const ticketMatch = window.location.hash.match(/^#\/ticket\/(\d+)$/);
+    if (ticketMatch) {
+      void loadTicketById(parseInt(ticketMatch[1], 10));
+    } else {
+      setCurrentView("dashboard");
+      setSelectedTicket(null);
+    }
+
+    WindowManager.cleanupOldTempFiles();
+  }, [isAuthenticated, loadTicketById]);
+
+  // A clicked notification raises this window and asks it to show a ticket.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void listen<number>('navigate://ticket', (event) => {
+      void loadTicketById(event.payload);
+    }).then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, [loadTicketById]);
 
   const handleViewChange = (view: string) => {
     setCurrentView(view);
@@ -152,16 +162,21 @@ function AppContent() {
     }
   };
 
+  // Every screen needs the titlebar: with decorations disabled there is no OS
+  // frame, so without it the window cannot be moved, minimised or closed.
   if (isLoading || isLoadingTicket) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center mx-auto animate-pulse">
-            <div className="w-4 h-4 bg-primary-foreground rounded" />
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <Titlebar title="Ticketbase" />
+        <div className="flex flex-1 items-center justify-center">
+          <div className="text-center space-y-4">
+            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center mx-auto animate-pulse">
+              <div className="w-4 h-4 bg-primary-foreground rounded" />
+            </div>
+            <p className="text-muted-foreground">
+              {isLoadingTicket ? "Loading ticket..." : "Loading..."}
+            </p>
           </div>
-          <p className="text-muted-foreground">
-            {isLoadingTicket ? "Loading ticket..." : "Loading..."}
-          </p>
         </div>
       </div>
     );
@@ -169,10 +184,13 @@ function AppContent() {
 
   if (!isAuthenticated) {
     return (
-      <>
-        <CustomLoginForm />
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <Titlebar title="Ticketbase" />
+        <div className="flex-1 overflow-auto">
+          <CustomLoginForm />
+        </div>
         <UpdateNotification />
-      </>
+      </div>
     );
   }
 
@@ -218,7 +236,9 @@ function AppContent() {
   };
 
   return (
-    <SidebarProvider>
+    <div className="flex h-screen flex-col overflow-hidden">
+      <Titlebar title="Ticketbase" />
+      <SidebarProvider className="min-h-0 flex-1">
       <TicketAppSidebar currentView={currentView} onViewChange={handleViewChange} />
       <SidebarInset>
         <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
@@ -252,7 +272,8 @@ function AppContent() {
         onClose={() => setShowDebugPanel(false)}
       />
       <Toaster />
-    </SidebarProvider>
+      </SidebarProvider>
+    </div>
   );
 }
 
