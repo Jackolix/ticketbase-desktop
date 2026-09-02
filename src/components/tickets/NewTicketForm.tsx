@@ -103,9 +103,9 @@ export function NewTicketForm() {
     } catch (error) {
       console.error('Failed to fetch initial data:', error);
       if (error instanceof Error) {
-        setError(`Failed to load form data: ${error.message}. Please refresh the page.`);
+        setError(`Formulardaten konnten nicht geladen werden: ${error.message}`);
       } else {
-        setError('Failed to load form data. Please refresh the page.');
+        setError('Formulardaten konnten nicht geladen werden. Bitte erneut versuchen.');
       }
     } finally {
       setIsLoading(false);
@@ -220,17 +220,17 @@ export function NewTicketForm() {
 
     // Validate required fields
     if (!formData.description.trim()) {
-      setError('Description is required');
+      setError('Beschreibung ist erforderlich');
       return;
     }
 
     if (formData.description.trim().length < 3) {
-      setError('Description must be at least 3 characters long');
+      setError('Die Beschreibung muss mindestens 3 Zeichen haben');
       return;
     }
 
     if (formData.description.trim().length > 1000) {
-      setError('Description must be less than 1000 characters');
+      setError('Die Beschreibung darf höchstens 1000 Zeichen haben');
       return;
     }
 
@@ -273,14 +273,14 @@ export function NewTicketForm() {
       if (response.status === 'success') {
         setSuccess(true);
         const companyName = companies.find(c => c.id.toString() === formData.company_id)?.name || 'the company';
-        const priorityLabel = formData.priority === 'VERY_HIGH' ? 'High (8 hours)' : 
-                              formData.priority === 'HIGH' ? 'Medium (2 days)' : 'Low (4 days)';
+        const priorityLabel = formData.priority === 'VERY_HIGH' ? 'Sehr hoch' :
+                              formData.priority === 'HIGH' ? 'Hoch' : 'Normal';
         const attachmentInfo = formData.attachments.length > 0 
           ? ` with ${formData.attachments.length} attachment${formData.attachments.length > 1 ? 's' : ''}`
           : '';
         
         setSuccessMessage(
-          `Ticket created successfully for ${companyName} with ${priorityLabel} priority${attachmentInfo}. ` +
+          `Ticket für ${companyName} angelegt — Priorität ${priorityLabel}${attachmentInfo}. ` +
           `It will be assigned to a technician soon.`
         );
         
@@ -331,9 +331,9 @@ export function NewTicketForm() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
+      <div className="mx-auto w-full max-w-3xl space-y-5">
         <div className="space-y-2">
-          <h1 className="text-3xl font-bold">Create New Ticket</h1>
+          <h1 className="text-lg font-semibold">Neues Ticket</h1>
           <p className="text-muted-foreground">Loading form data...</p>
         </div>
         <Card className="animate-pulse">
@@ -355,9 +355,9 @@ export function NewTicketForm() {
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h1 className="text-3xl font-bold">Create New Ticket</h1>
+        <h1 className="text-lg font-semibold">Neues Ticket</h1>
         <p className="text-muted-foreground">
-          Fill out the form below to create a new support ticket.
+          Pflichtfelder sind mit * markiert.
         </p>
       </div>
 
@@ -365,10 +365,10 @@ export function NewTicketForm() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" />
-            New Ticket Details
+            Angaben zum Ticket
           </CardTitle>
           <CardDescription>
-            Provide as much detail as possible to help resolve your issue quickly.
+            Je genauer die Beschreibung, desto schneller die Bearbeitung.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -392,14 +392,14 @@ export function NewTicketForm() {
             {/* Description */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="description">Description *</Label>
+                <Label htmlFor="description">Beschreibung *</Label>
                 <span className="text-xs text-muted-foreground">
-                  {formData.description.length} / 1000 characters
+                  {formData.description.length} / 1000 Zeichen
                 </span>
               </div>
               <Textarea
                 id="description"
-                placeholder="Describe the issue or request in detail..."
+                placeholder="Problem oder Anfrage beschreiben…"
                 value={formData.description}
                 onChange={(e) => handleInputChange('description', e.target.value)}
                 className="min-h-[100px]"
@@ -407,13 +407,13 @@ export function NewTicketForm() {
                 maxLength={1000}
               />
               {formData.description.length > 0 && formData.description.length < 3 && (
-                <p className="text-xs text-destructive">Minimum 3 characters required</p>
+                <p className="text-xs text-destructive">Mindestens 3 Zeichen erforderlich</p>
               )}
             </div>
 
             {/* Priority */}
             <div className="space-y-2">
-              <Label>Priority</Label>
+              <Label>Priorität</Label>
               <Select 
                 value={formData.priority} 
                 onValueChange={(value) => handleInputChange('priority', value)}
@@ -423,23 +423,26 @@ export function NewTicketForm() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="NORMAL">Low (4 days)</SelectItem>
-                  <SelectItem value="HIGH">Medium (2 days)</SelectItem>
-                  <SelectItem value="VERY_HIGH">High (8 hours)</SelectItem>
+                  {/* Labels match the rest of the app. They used to be shifted
+                      one step down — HIGH was shown as "Medium" — so a ticket
+                      read differently in the form than in the list. */}
+                  <SelectItem value="NORMAL">Normal — 4 Tage</SelectItem>
+                  <SelectItem value="HIGH">Hoch — 2 Tage</SelectItem>
+                  <SelectItem value="VERY_HIGH">Sehr hoch — 8 Stunden</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Company */}
+            {/* Kunde */}
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <Building className="h-4 w-4" />
-                Company *
+                Kunde *
               </Label>
               <div className="relative" ref={companyDropdownRef}>
                 <Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
                 <Input
-                  placeholder="Search companies..."
+                  placeholder="Kunde suchen…"
                   value={companySearchTerm}
                   onChange={(e) => {
                     setCompanySearchTerm(e.target.value);
@@ -629,18 +632,18 @@ export function NewTicketForm() {
                 }}
                 disabled={isSubmitting}
               >
-                Clear Form
+                Zurücksetzen
               </Button>
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Creating Ticket...
+                    Wird angelegt…
                   </>
                 ) : (
                   <>
                     <Plus className="mr-2 h-4 w-4" />
-                    Create Ticket
+                    Ticket anlegen
                   </>
                 )}
               </Button>

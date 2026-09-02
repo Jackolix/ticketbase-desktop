@@ -196,13 +196,17 @@ function Stat({
     tone === 'danger' ? 'text-tone-danger' : tone === 'active' ? 'text-tone-active' : '';
 
   return (
-    <Card>
-      <CardContent className="flex items-center justify-between p-3">
-        <div>
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-          <p className={`text-2xl font-semibold tabular-nums ${accent}`}>{value}</p>
+    <Card className="gap-0 py-0">
+      <CardContent className="flex items-start justify-between gap-2 p-3">
+        <div className="min-w-0">
+          <p className="truncate text-[11px] uppercase tracking-wide text-muted-foreground">
+            {label}
+          </p>
+          <p className={`mt-0.5 text-xl font-semibold leading-none tabular-nums ${accent}`}>
+            {value}
+          </p>
         </div>
-        <Icon className={`h-4 w-4 ${accent || 'text-muted-foreground'}`} />
+        <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${accent || 'text-muted-foreground'}`} />
       </CardContent>
     </Card>
   );

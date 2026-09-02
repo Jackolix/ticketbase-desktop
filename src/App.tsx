@@ -207,11 +207,11 @@ function AppContent() {
     switch (currentView) {
       case "dashboard": return "Dashboard";
       case "tickets": return "Tickets";
-      case "new-ticket": return "New Ticket";
-      case "settings": return "Settings";
-      case "today": return "Today's Schedule";
-      case "wiki": return "Knowledge Base";
-      case "reports": return "Reports";
+      case "new-ticket": return "Neues Ticket";
+      case "settings": return "Einstellungen";
+      case "today": return "Heute";
+      case "wiki": return "Wissensdatenbank";
+      case "reports": return "Berichte";
       default: return "Dashboard";
     }
   };

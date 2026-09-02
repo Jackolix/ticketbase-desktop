@@ -121,6 +121,8 @@ export interface ApiResponse<T = any> {
   ticket_data?: TicketHistory[];
   check_list?: TodoItem[];
   playerStatus?: PlayerStatus;
+  /** getUserStatus and changeUserStatus return this at the top level, not under data. */
+  activity?: UserStatus;
   users?: User[];
   messages?: any[];
   todayTickets?: any[];
