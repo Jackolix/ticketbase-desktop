@@ -70,10 +70,10 @@ jobs:
           # Extract version from tag (remove 'v' prefix if present)
           VERSION=${GITHUB_REF_NAME#v}
           echo "Updating version to: $VERSION"
-          
+
           # Update package.json version
-          npm version --no-git-tag-version $VERSION
-          
+          npm version --no-git-tag-version --allow-same-version $VERSION
+
           # Update tauri.conf.json version using our script
           APP_VERSION=$VERSION npm run update-config
 
@@ -93,24 +93,24 @@ jobs:
           updaterJsonKeepUniversal: true
           releaseBody: |
             ## What's Changed
-            
+
             See the full changelog: https://github.com/${{ github.repository }}/commits/${{ github.sha }}
-            
+
             ## Installation
-            
+
             ### Windows
             - Download and run the `.msi` installer
             - Or use the portable `.exe` version
-            
+
             ### macOS
             - Download and install the `.dmg` file
             - For Apple Silicon Macs (M1/M2): Use the `aarch64` version
             - For Intel Macs: Use the `x86_64` version
-            
+
             ### Linux
             - Download the `.AppImage` file and make it executable
             - Or install the `.deb` package on Debian/Ubuntu systems
-            
+
             ## Notes
             - Built with Tauri v1
             - This is an automated release created from commit: ${{ github.sha }}
@@ -125,4 +125,3 @@ jobs:
             src-tauri/target/**/bundle/**/*.msi
             src-tauri/target/**/bundle/**/*.AppImage
             src-tauri/target/**/bundle/**/*.deb
-
