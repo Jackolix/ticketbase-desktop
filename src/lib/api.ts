@@ -88,16 +88,6 @@ class ApiClient {
     this.clearToken();
   }
 
-  async getTicketsToday(userId: number, datum: string): Promise<ApiResponse<{todayTickets: any[]}>> {
-    return this.request<ApiResponse<{todayTickets: any[]}>>('/getTicketsToday', {
-      method: 'POST',
-      body: JSON.stringify({
-        user_id: userId,
-        datum,
-      }),
-    });
-  }
-
   async getTicketData(ticketId: number): Promise<ApiResponse<{ticket_data: TicketHistory[]}>> {
     return this.request<ApiResponse<{ticket_data: TicketHistory[]}>>('/getTicketData', {
       method: 'POST',

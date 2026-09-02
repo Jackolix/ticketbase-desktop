@@ -156,13 +156,19 @@ export function NewTicketForm() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files && files.length > 0) {
-      const newFiles = Array.from(files);
-      setFormData(prev => ({
-        ...prev,
-        attachments: [...prev.attachments, ...newFiles]
-      }));
-    }
+    if (!files || files.length === 0) return;
+
+    // One attachment only.
+    //
+    // createTicket posts each file under the same `ticket_image` key, and PHP
+    // keeps only the last value for a field without `[]`. Sending
+    // `ticket_image[]` instead does not help: createTicketMobile calls
+    // getClientOriginalName() on the value directly, so an array would fail
+    // server-side. Until the backend accepts multiple, letting the user pick
+    // several and silently uploading one is worse than saying so.
+    const [first] = Array.from(files);
+    setFormData(prev => ({ ...prev, attachments: [first] }));
+    e.target.value = '';
   };
 
   const removeAttachment = (index: number) => {
@@ -559,7 +565,10 @@ export function NewTicketForm() {
             <div className="space-y-2">
               <Label htmlFor="attachments" className="flex items-center gap-2">
                 <Upload className="h-4 w-4" />
-                Attachments
+                Anhang
+                <span className="text-xs font-normal text-muted-foreground">
+                  — eine Datei (Serverlimit)
+                </span>
               </Label>
               <div className="space-y-2">
                 <Input
@@ -567,7 +576,6 @@ export function NewTicketForm() {
                   type="file"
                   onChange={handleFileChange}
                   accept="image/*"
-                  multiple
                   disabled={isSubmitting}
                   className="cursor-pointer"
                 />

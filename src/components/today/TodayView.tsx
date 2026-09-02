@@ -1,314 +1,245 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CalendarDays, CheckCircle2, Clock, Pause, Play, Timer } from 'lucide-react';
+
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { useAuth } from '@/contexts/AuthContext';
-import { apiClient } from '@/lib/api';
-import { cache } from '@/lib/cache';
-import { TONE_BADGE, priorityTone } from '@/lib/ticketStatus';
+import { onSyncChanged, queryTickets } from '@/lib/sync';
+import { compareTicketDates, parseTicketDate } from '@/lib/ticketDate';
+import { isRunning, toPlayerState } from '@/lib/playerStatus';
+import { TONE_BADGE, TONE_RAIL, priorityLabel, priorityTone, statusTone } from '@/lib/ticketStatus';
 import { Ticket } from '@/types/api';
-import {
-  Calendar,
-  Clock,
-  Play,
-  CheckCircle2,
-  AlertCircle,
-  TrendingUp,
-  Loader2,
-  Timer,
-  ListTodo,
-  Ticket as TicketIcon,
-} from 'lucide-react';
 
 interface TodayViewProps {
   onTicketSelect: (ticket: Ticket) => void;
 }
 
+/**
+ * Today's schedule, as a timeline of what is booked.
+ *
+ * Reads the local store rather than calling getTicketsToday, so it is instant
+ * and shares one source of truth with the board and dashboard. The two resolve
+ * to the same set in practice: getTicketsToday selects the user's tickets
+ * scheduled today and not closed, which is the `mine` bucket filtered by
+ * ticket_start. They differ only for a ticket still in status "Neu" that
+ * already has an owner — which claiming a ticket makes impossible, since that
+ * moves it to "Zugewiesen".
+ */
 export function TodayView({ onTicketSelect }: TodayViewProps) {
-  const { user } = useAuth();
-  const [todayTickets, setTodayTickets] = useState<Ticket[]>([]);
+  const [mine, setMine] = useState<Ticket[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [workTimeStats, setWorkTimeStats] = useState({
-    totalMinutes: 0,
-    activeTickets: 0,
-    completedToday: 0,
-  });
 
-  const fetchTodayData = useCallback(async (forceRefresh = false) => {
-    if (!user) return;
-
-    const today = new Date().toISOString().split('T')[0];
-    const cacheKey = `today_tickets_${user.id}_${today}`;
-
-    // Try to get from cache first
-    if (!forceRefresh) {
-      const cachedData = cache.get<Ticket[]>(cacheKey);
-      if (cachedData) {
-        setTodayTickets(cachedData);
-
-        // Calculate stats from cached tickets
-        let activeTickets = 0;
-        let completedToday = 0;
-
-        cachedData.forEach((ticket: any) => {
-          if (ticket.status_id === 4) {
-            completedToday++;
-          }
-          if (ticket.status_id !== 4 && ticket.my_ticket_id === user.id) {
-            activeTickets++;
-          }
-        });
-
-        setWorkTimeStats({
-          totalMinutes: 0,
-          activeTickets,
-          completedToday,
-        });
-        setIsLoading(false);
-        return;
-      }
-    }
-
-    setIsLoading(true);
+  const loadFromStore = useCallback(async () => {
     try {
-      const response = await apiClient.getTicketsToday(user.id, today);
-
-      if (response.status === 'success' && response.todayTickets) {
-        setTodayTickets(response.todayTickets);
-
-        // Cache the response for 5 minutes
-        cache.set(cacheKey, response.todayTickets, 5 * 60 * 1000);
-
-        // Calculate stats from tickets
-        let activeTickets = 0;
-        let completedToday = 0;
-
-        response.todayTickets.forEach((ticket: any) => {
-          if (ticket.status_id === 4) {
-            completedToday++;
-          }
-          if (ticket.status_id !== 4 && ticket.my_ticket_id === user.id) {
-            activeTickets++;
-          }
-        });
-
-        setWorkTimeStats({
-          totalMinutes: 0, // Work time not provided by backend
-          activeTickets,
-          completedToday,
-        });
-      }
+      setMine(await queryTickets({ bucket: 'mine' }));
     } catch (error) {
-      console.error('Failed to fetch today data:', error);
+      console.error('Failed to read tickets from the local store:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [user]);
+  }, []);
 
   useEffect(() => {
-    if (user) {
-      void fetchTodayData();
-    }
-  }, [user, fetchTodayData]);
+    void loadFromStore();
+  }, [loadFromStore]);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
 
-  const formatDateTime = useCallback((dateString: string): string => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  }, []);
+    void onSyncChanged(() => void loadFromStore()).then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+    });
 
-
-  const getStatusBadge = useCallback((statusId: number) => {
-    const statusMap: Record<number, { label: string; variant: any }> = {
-      1: { label: 'Neu', variant: 'default' },
-      2: { label: 'Terminiert', variant: 'secondary' },
-      3: { label: 'Prüfen', variant: 'outline' },
-      4: { label: 'Abgeschlossen', variant: 'success' },
-      5: { label: 'Offen', variant: 'default' },
-      6: { label: 'Vor Ort', variant: 'default' },
-      8: { label: 'Wieder geöffnet', variant: 'destructive' },
-      9: { label: 'Warten auf Rückmeldung', variant: 'outline' },
-      11: { label: 'Warten (Extern)', variant: 'outline' },
-      13: { label: 'In Bearbeitung', variant: 'default' },
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
     };
-    return statusMap[statusId] || { label: 'Unbekannt', variant: 'outline' };
-  }, []);
+  }, [loadFromStore]);
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
+  const scheduled = useMemo(() => {
+    const today = new Date().toDateString();
+    return mine
+      .filter((t) => parseTicketDate(t.ticket_start)?.toDateString() === today)
+      .sort((a, b) => compareTicketDates(a.ticket_start, b.ticket_start));
+  }, [mine]);
+
+  const running = useMemo(
+    () => mine.filter((t) => toPlayerState(t.playStatus) !== 'stopped'),
+    [mine],
+  );
+
+  const done = useMemo(
+    () => scheduled.filter((t) => statusTone(t.status) === 'success'),
+    [scheduled],
+  );
+
+  const now = new Date();
+  const heading = now.toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+
+  if (isLoading) return <TodaySkeleton />;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-5">
       <div>
-        <h1 className="text-3xl font-bold flex items-center gap-3">
-          <Calendar className="h-8 w-8" />
-          Heute - {new Date().toLocaleDateString('de-DE', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          })}
+        <h1 className="flex items-center gap-2 text-lg font-semibold">
+          <CalendarDays className="h-5 w-5" />
+          {heading}
         </h1>
-        <p className="text-muted-foreground mt-1">
-          Ihre heutigen Tickets und Arbeitszeit
+        <p className="text-sm text-muted-foreground">
+          {scheduled.length === 0
+            ? 'Für heute ist nichts terminiert.'
+            : `${scheduled.length} ${scheduled.length === 1 ? 'Termin' : 'Termine'}, ${done.length} abgeschlossen.`}
         </p>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">
-              Terminierte Tickets
-            </CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {todayTickets.length}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Für heute geplant
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">
-              Aktive Tickets
-            </CardTitle>
-            <Play className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{workTimeStats.activeTickets}</div>
-            <p className="text-xs text-muted-foreground">
-              In Bearbeitung
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">
-              Heute abgeschlossen
-            </CardTitle>
-            <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{workTimeStats.completedToday}</div>
-            <p className="text-xs text-muted-foreground">
-              Tickets erledigt
-            </p>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-3 gap-3">
+        <Stat label="Terminiert" value={scheduled.length} icon={Clock} />
+        <Stat
+          label="Läuft"
+          value={running.length}
+          icon={Timer}
+          tone={running.length > 0 ? 'active' : undefined}
+        />
+        <Stat label="Abgeschlossen" value={done.length} icon={CheckCircle2} />
       </div>
 
-      {/* Quick Actions */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5" />
-            Quick Actions
-          </CardTitle>
-          <CardDescription>
-            Schnelle Aktionen für heute
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex gap-2 flex-wrap">
-          <Button variant="default" onClick={() => window.location.hash = '#new-ticket'}>
-            <TicketIcon className="h-4 w-4 mr-2" />
-            Neues Ticket
-          </Button>
-          <Button variant="outline" onClick={() => fetchTodayData(true)}>
-            <Clock className="h-4 w-4 mr-2" />
-            Aktualisieren
-          </Button>
-        </CardContent>
-      </Card>
+      <Card className="overflow-hidden py-0">
+        <div className="border-b px-3 py-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide">Tagesplan</h2>
+        </div>
 
-      {/* Today's Timeline */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Timer className="h-5 w-5" />
-            Heutige Tickets
-          </CardTitle>
-          <CardDescription>
-            {todayTickets.length} Ticket{todayTickets.length !== 1 ? 's' : ''} für heute
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {todayTickets.length === 0 ? (
-            <div className="text-center py-12">
-              <ListTodo className="h-16 w-16 mx-auto mb-4 text-muted-foreground/20" />
-              <h3 className="text-lg font-medium mb-2">Keine Tickets für heute</h3>
-              <p className="text-muted-foreground">
-                Sie haben heute keine terminierten Tickets
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {todayTickets.map((ticket: any) => {
-                const status = getStatusBadge(ticket.status_id);
-                return (
-                  <Card
-                    key={ticket.id}
-                    className="hover:shadow-md transition-shadow cursor-pointer"
+        {scheduled.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 px-3 py-12 text-center">
+            <CalendarDays className="h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">Keine Termine für heute</p>
+            <p className="text-xs text-muted-foreground">
+              Terminierte Tickets erscheinen hier automatisch.
+            </p>
+          </div>
+        ) : (
+          <ul className="divide-y">
+            {scheduled.map((ticket) => {
+              const start = parseTicketDate(ticket.ticket_start);
+              const past = start ? start < now : false;
+              const active = toPlayerState(ticket.playStatus) !== 'stopped';
+
+              return (
+                <li key={ticket.id}>
+                  <button
+                    type="button"
                     onClick={() => onTicketSelect(ticket)}
+                    className="flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-accent/50 focus:bg-accent/50 focus:outline-none"
                   >
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 space-y-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Badge variant="outline">#{ticket.id}</Badge>
-                            <Badge variant={status.variant as any}>
-                              {status.label}
-                            </Badge>
-                            {ticket.priority && (
-                              <Badge
-                                variant="outline" className={TONE_BADGE[priorityTone(ticket.priority, ticket.index)]}
-                              >
-                                {ticket.priority}
-                              </Badge>
-                            )}
-                          </div>
-                          <h3 className="font-medium line-clamp-1">
-                            {ticket.subject || ticket.description || 'Kein Betreff'}
-                          </h3>
-                          <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                            {ticket.company?.name && (
-                              <span className="flex items-center gap-1">
-                                <TicketIcon className="h-3 w-3" />
-                                {ticket.company.name}
-                              </span>
-                            )}
-                            {ticket.ticket_start && (
-                              <span className="flex items-center gap-1">
-                                <Clock className="h-3 w-3" />
-                                {formatDateTime(ticket.ticket_start)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {ticket.status_id === 4 ? (
-                          <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+                    {/* Time is the spine of this view, so it leads. */}
+                    <span
+                      className={[
+                        'w-12 shrink-0 pt-0.5 font-mono text-sm tabular-nums',
+                        past && !active ? 'text-muted-foreground' : 'font-semibold',
+                      ].join(' ')}
+                    >
+                      {start
+                        ? start.toLocaleTimeString(undefined, {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '--:--'}
+                    </span>
+
+                    <span
+                      className={`mt-1 h-8 w-[3px] shrink-0 rounded-full ${
+                        TONE_RAIL[priorityTone(ticket.priority, ticket.index)]
+                      }`}
+                    />
+
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                          {ticket.id}
+                        </span>
+                        <span className="truncate text-sm font-medium">
+                          {ticket.summary || '—'}
+                        </span>
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {[ticket.company?.name, ticket.subject, priorityLabel(ticket.priority)]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </span>
+
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {active &&
+                        (isRunning(ticket.playStatus) ? (
+                          <Play className="h-3 w-3 fill-tone-success text-tone-success" />
                         ) : (
-                          <AlertCircle className="h-5 w-5 text-orange-500 shrink-0" />
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
+                          <Pause className="h-3 w-3 text-tone-warning" />
+                        ))}
+                      <Badge
+                        variant="outline"
+                        className={`${TONE_BADGE[statusTone(ticket.status)]} px-1.5 py-0 text-[10px]`}
+                      >
+                        {ticket.status || '—'}
+                      </Badge>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  icon: Icon,
+  tone,
+}: {
+  label: string;
+  value: number;
+  icon: typeof Clock;
+  tone?: 'active';
+}) {
+  const accent = tone === 'active' ? 'text-tone-active' : '';
+  return (
+    <Card>
+      <CardContent className="flex items-center justify-between p-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className={`text-2xl font-semibold tabular-nums ${accent}`}>{value}</p>
+        </div>
+        <Icon className={`h-4 w-4 ${accent || 'text-muted-foreground'}`} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function TodaySkeleton() {
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-3 gap-3">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Card key={i} className="animate-pulse">
+            <CardContent className="space-y-2 p-3">
+              <div className="h-2 w-20 rounded bg-muted" />
+              <div className="h-6 w-10 rounded bg-muted" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <Card className="animate-pulse">
+        <CardContent className="space-y-2 p-3">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="h-8 rounded bg-muted" />
+          ))}
         </CardContent>
       </Card>
     </div>

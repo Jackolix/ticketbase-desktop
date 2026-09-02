@@ -10,6 +10,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { WindowManager } from '@/lib/windowManager';
 import { parseTicketDate } from '@/lib/ticketDate';
+import { syncRefresh } from '@/lib/sync';
+import { toast } from 'sonner';
 import { TONE_BADGE, priorityTone, statusTone } from '@/lib/ticketStatus';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
 import { TicketPlayerControls } from './TicketPlayerControls';
@@ -35,6 +37,7 @@ import {
   History,
   ListTodo,
   Eye,
+  UserPlus,
   X
 } from 'lucide-react';
 
@@ -67,12 +70,52 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
   const [previewFile, setPreviewFile] = useState<{ filename: string; ticketId: number } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isClaiming, setIsClaiming] = useState(false);
 
   const handleOpenInNewWindow = async () => {
     try {
       await WindowManager.openTicketInNewWindow(ticket);
     } catch (error) {
       console.error('Failed to open ticket in new window:', error);
+    }
+  };
+
+  /**
+   * Claims an unassigned ticket for the current user.
+   *
+   * The endpoint existed the whole time but nothing called it, so a technician
+   * could see a pool ticket in the desktop app and had to go to the web UI to
+   * take it. Server-side this sets my_ticket_id, moves the ticket to
+   * "Zugewiesen" and pushes a notification; it refuses if someone already has a
+   * timer running on the ticket.
+   */
+  const handleClaim = async () => {
+    if (!user) return;
+
+    setIsClaiming(true);
+    try {
+      const response = await apiClient.ticketTerminieren(
+        ticket.id,
+        user.id,
+        new Date().toISOString().slice(0, 10),
+      );
+
+      if (response.result === 'success') {
+        toast.success(`Ticket #${ticket.id} übernommen`);
+        // Pull the change back down rather than guessing the new state.
+        await syncRefresh();
+      } else {
+        toast.error('Ticket konnte nicht übernommen werden', {
+          description: response.message || 'Es ist möglicherweise bereits vergeben.',
+        });
+      }
+    } catch (error) {
+      console.error('Failed to claim ticket:', error);
+      toast.error('Ticket konnte nicht übernommen werden', {
+        description: 'Verbindung prüfen und erneut versuchen.',
+      });
+    } finally {
+      setIsClaiming(false);
     }
   };
 
@@ -292,6 +335,16 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
           <h1 className="text-2xl font-bold">{safeRender(ticket.summary)}</h1>
           <p className="text-muted-foreground">{safeRender(ticket.subject)}</p>
         </div>
+        {ticket.my_ticket_id === 0 && (
+          <Button onClick={handleClaim} disabled={isClaiming} className="gap-2">
+            {isClaiming ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <UserPlus className="h-4 w-4" />
+            )}
+            Übernehmen
+          </Button>
+        )}
         {variant === 'embedded' ? (
           <Button
             variant="outline"
