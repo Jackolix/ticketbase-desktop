@@ -368,14 +368,7 @@ export function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                         Attachments
                       </h4>
                       <div className="space-y-2">
-                        {ticket.attachments.map((attachment, index) => {
-                          let filename = '';
-                          if (typeof attachment === 'string') {
-                            filename = attachment;
-                          } else if (attachment && typeof attachment === 'object') {
-                            // Handle object attachments - extract filename from various possible properties
-                            filename = safeRender(attachment.filename || attachment.attachment || attachment);
-                          }
+                        {ticket.attachments.map((filename, index) => {
                           return (
                             <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded hover:bg-muted/80 transition-colors group">
                               <Paperclip className="h-4 w-4 text-muted-foreground" />

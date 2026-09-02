@@ -1,49 +1,31 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { useAuth } from './AuthContext';
-import { apiClient } from '@/lib/api';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Ticket, Company } from '@/types/api';
-import { performanceMonitor } from '@/utils/performanceMonitor';
+import {
+  getSyncStatus,
+  getTicketCounts,
+  onSyncChanged,
+  onSyncStatus,
+  queryTickets,
+  syncRefresh,
+  type BucketCounts,
+  type SyncStatus,
+  type TicketQuery,
+  type TicketSort,
+} from '@/lib/sync';
 
-// Helper hook to get notification settings without circular dependency
-function useNotificationSettings() {
-  const [settings, setSettings] = useState<{ ticketRefreshInterval: number }>(() => {
-    const stored = localStorage.getItem('notification-settings');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        return { ticketRefreshInterval: parsed.ticketRefreshInterval || 30 };
-      } catch {
-        // Fallback to defaults
-      }
-    }
-    return { ticketRefreshInterval: 30 };
-  });
-
-  useEffect(() => {
-    const handleStorageChange = () => {
-      const stored = localStorage.getItem('notification-settings');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          setSettings({ ticketRefreshInterval: parsed.ticketRefreshInterval || 30 });
-        } catch {
-          // Ignore parse errors
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    // Also listen for custom events for same-window updates
-    window.addEventListener('notification-settings-changed', handleStorageChange);
-
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('notification-settings-changed', handleStorageChange);
-    };
-  }, []);
-
-  return settings;
-}
+/**
+ * Ticket state for the UI.
+ *
+ * This provider does no fetching and runs no timers. The Rust sync core owns
+ * both, once for the whole application; this subscribes to its events and reads
+ * the local store. Previously every window mounted its own copy of this and ran
+ * its own 30-second poll, so N windows meant N full pulls of every open ticket.
+ *
+ * Filtering and sorting happen in SQLite over every synced ticket, which
+ * replaces the old client-side filter over whatever happened to be loaded — and
+ * with it the `/testGetTickets` call and the `user_group_id = 1` pool bypass
+ * that the customer filter used to depend on.
+ */
 
 interface FilterState {
   searchTerm: string;
@@ -54,57 +36,41 @@ interface FilterState {
   dateFromFilter: string;
   dateToFilter: string;
   showAdvancedFilters: boolean;
-  sortBy: string;
+  sortBy: TicketSort;
 }
 
 interface NavigationState {
   activeTab: string;
-  scrollPositions: {
-    my: number;
-    new: number;
-    all: number;
-  };
+  scrollPositions: { my: number; new: number; all: number };
   viewMode: 'list' | 'grid';
 }
 
+interface TicketBuckets {
+  new_tickets: Ticket[];
+  my_tickets: Ticket[];
+  all_tickets: Ticket[];
+}
+
 interface TicketsContextType {
-  tickets: {
-    new_tickets: Ticket[];
-    my_tickets: Ticket[];
-    all_tickets: Ticket[];
-  };
+  /** Filtered and sorted by the store, per bucket. */
+  tickets: TicketBuckets;
+  /** Unfiltered totals, for tab badges. */
+  counts: BucketCounts;
   isLoading: boolean;
-  isRefreshing: boolean;
-  lastUpdated: Date | null;
+  /** Null until the first status arrives. */
+  syncStatus: SyncStatus | null;
+  /** Asks the sync engine for an immediate pull. */
   refreshTickets: () => Promise<void>;
-  loadAllTicketsForSearch: () => Promise<{
-    new_tickets: Ticket[];
-    my_tickets: Ticket[];
-    all_tickets: Ticket[];
-  }>;
-  updateTicket: (updatedTicket: Ticket) => void;
-  addTicket: (newTicket: Ticket) => void;
-  // Filter state management
+
   filterState: FilterState;
   updateFilterState: (updates: Partial<FilterState>) => void;
   clearFilters: () => void;
-  // Navigation state management
+
   navigationState: NavigationState;
-  updateNavigationState: (updates: Partial<NavigationState>) => void;
   setActiveTab: (tab: string) => void;
   setScrollPosition: (tab: 'my' | 'new' | 'all', position: number) => void;
   setViewMode: (mode: 'list' | 'grid') => void;
-  // Additional ticket data for filtering
-  allTicketsForSearch: {
-    new_tickets: Ticket[];
-    my_tickets: Ticket[];
-    all_tickets: Ticket[];
-  } | null;
-  setAllTicketsForSearch: (tickets: {
-    new_tickets: Ticket[];
-    my_tickets: Ticket[];
-    all_tickets: Ticket[];
-  } | null) => void;
+
   customers: Company[];
   setCustomers: (customers: Company[]) => void;
 }
@@ -120,293 +86,236 @@ const defaultFilterState: FilterState = {
   dateFromFilter: '',
   dateToFilter: '',
   showAdvancedFilters: false,
-  sortBy: 'date-desc'
+  sortBy: 'date-desc',
 };
 
 const defaultNavigationState: NavigationState = {
   activeTab: 'my',
-  scrollPositions: {
-    my: 0,
-    new: 0,
-    all: 0
-  },
-  viewMode: 'list'
+  scrollPositions: { my: 0, new: 0, all: 0 },
+  viewMode: 'list',
 };
 
-export function TicketsProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
-  const notificationSettings = useNotificationSettings();
-  const [tickets, setTickets] = useState<{
-    new_tickets: Ticket[];
-    my_tickets: Ticket[];
-    all_tickets: Ticket[];
-  }>({ new_tickets: [], my_tickets: [], all_tickets: [] });
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+const emptyBuckets: TicketBuckets = { new_tickets: [], my_tickets: [], all_tickets: [] };
+const emptyCounts: BucketCounts = { new: 0, mine: 0, all: 0 };
 
-  // Filter state management
-  const [filterState, setFilterState] = useState<FilterState>(defaultFilterState);
-  const [allTicketsForSearch, setAllTicketsForSearch] = useState<{
-    new_tickets: Ticket[];
-    my_tickets: Ticket[];
-    all_tickets: Ticket[];
-  } | null>(null);
+function readStored<T>(key: string, fallback: T): T {
+  try {
+    const raw = sessionStorage.getItem(key);
+    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStored(key: string, value: unknown) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Session storage being unavailable is not worth failing a render over.
+  }
+}
+
+export function TicketsProvider({ children }: { children: React.ReactNode }) {
+  const [tickets, setTickets] = useState<TicketBuckets>(emptyBuckets);
+  const [counts, setCounts] = useState<BucketCounts>(emptyCounts);
+  const [isLoading, setIsLoading] = useState(true);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+
+  const [filterState, setFilterState] = useState<FilterState>(() =>
+    readStored('ticketFilterState', defaultFilterState),
+  );
+  const [navigationState, setNavigationState] = useState<NavigationState>(() =>
+    readStored('ticketNavigationState', defaultNavigationState),
+  );
   const [customers, setCustomers] = useState<Company[]>([]);
 
-  // Navigation state management
-  const [navigationState, setNavigationState] = useState<NavigationState>(defaultNavigationState);
+  // Guards against an in-flight query from stale filters overwriting a newer
+  // result. Local queries are fast but not instantaneous.
+  const queryToken = useRef(0);
 
-  const fetchTickets = useCallback(async (isBackground = false) => {
-    if (!user) return;
+  const baseQuery: Omit<TicketQuery, 'bucket'> = useMemo(
+    () => ({
+      search: filterState.searchTerm || undefined,
+      companyId: filterState.customerFilter ? Number(filterState.customerFilter) : undefined,
+      status: filterState.statusFilter !== 'all' ? filterState.statusFilter : undefined,
+      priority: filterState.priorityFilter !== 'all' ? filterState.priorityFilter : undefined,
+      dateFrom: filterState.dateFromFilter || undefined,
+      dateTo: filterState.dateToFilter || undefined,
+      sort: filterState.sortBy,
+    }),
+    [
+      filterState.searchTerm,
+      filterState.customerFilter,
+      filterState.statusFilter,
+      filterState.priorityFilter,
+      filterState.dateFromFilter,
+      filterState.dateToFilter,
+      filterState.sortBy,
+    ],
+  );
 
-    const timerLabel = isBackground ? 'fetchTickets.background' : 'fetchTickets.initial';
-    performanceMonitor.startTimer(timerLabel);
-
-    if (!isBackground) setIsLoading(true);
-    setIsRefreshing(true);
-
+  const loadFromStore = useCallback(async () => {
+    const token = ++queryToken.current;
     try {
-      // Use normal filtered endpoint for dashboard performance
-      const response = await apiClient.getTickets(
-        user.id,
-        user.user_group_id,
-        user.company_id,
-        user.location_id,
-        user.id,
-        user.sub_user_group_id
-      );
-      setTickets(response);
-      setLastUpdated(new Date());
+      const [newTickets, myTickets, allTickets, nextCounts] = await Promise.all([
+        queryTickets({ ...baseQuery, bucket: 'new' }),
+        queryTickets({ ...baseQuery, bucket: 'mine' }),
+        queryTickets({ ...baseQuery, bucket: 'all' }),
+        getTicketCounts(),
+      ]);
 
-      // Record cache stats
-      const ticketCount = response.new_tickets.length + response.my_tickets.length + response.all_tickets.length;
-      const dataSize = new Blob([JSON.stringify(response)]).size;
-      performanceMonitor.recordCacheSize('tickets', dataSize, ticketCount);
+      if (token !== queryToken.current) return;
 
+      setTickets({
+        new_tickets: newTickets,
+        my_tickets: myTickets,
+        all_tickets: allTickets,
+      });
+      setCounts(nextCounts);
     } catch (error) {
-      console.error('Failed to fetch tickets:', error);
+      console.error('Failed to read tickets from the local store:', error);
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-      performanceMonitor.endTimer(timerLabel);
+      if (token === queryToken.current) setIsLoading(false);
     }
-  }, [user]);
+  }, [baseQuery]);
+
+  // Re-query whenever the filters change.
+  useEffect(() => {
+    void loadFromStore();
+  }, [loadFromStore]);
+
+  // Re-query when the sync engine reports the data changed. One subscription
+  // per window, but only one engine doing the actual work.
+  useEffect(() => {
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+
+    const subscribe = async () => {
+      const [offChanged, offStatus] = await Promise.all([
+        onSyncChanged(() => {
+          void loadFromStore();
+        }),
+        onSyncStatus((status) => {
+          setSyncStatus(status);
+        }),
+      ]);
+
+      if (disposed) {
+        offChanged();
+        offStatus();
+        return;
+      }
+      unlisteners.push(offChanged, offStatus);
+
+      // A window opened after a sync missed the event, so catch up once.
+      try {
+        setSyncStatus(await getSyncStatus());
+      } catch (error) {
+        console.error('Failed to read sync status:', error);
+      }
+    };
+
+    void subscribe();
+
+    return () => {
+      disposed = true;
+      unlisteners.forEach((off) => off());
+    };
+  }, [loadFromStore]);
 
   const refreshTickets = useCallback(async () => {
-    await fetchTickets(true); // Background refresh
-  }, [fetchTickets]);
-
-  const updateTicket = useCallback((updatedTicket: Ticket) => {
-    setTickets(prevTickets => {
-      const updateTicketInArray = (ticketArray: Ticket[]) =>
-        ticketArray.map(ticket => 
-          ticket.id === updatedTicket.id ? updatedTicket : ticket
-        );
-
-      return {
-        new_tickets: updateTicketInArray(prevTickets.new_tickets),
-        my_tickets: updateTicketInArray(prevTickets.my_tickets),
-        all_tickets: updateTicketInArray(prevTickets.all_tickets),
-      };
-    });
+    await syncRefresh();
   }, []);
 
-  const addTicket = useCallback((newTicket: Ticket) => {
-    setTickets(prevTickets => ({
-      ...prevTickets,
-      new_tickets: [newTicket, ...prevTickets.new_tickets],
-      all_tickets: [newTicket, ...prevTickets.all_tickets],
-    }));
-  }, []);
-
-  // Filter state management functions
   const updateFilterState = useCallback((updates: Partial<FilterState>) => {
-    setFilterState(prev => {
-      // Only update if values actually changed to prevent unnecessary re-renders
-      const hasChanges = Object.keys(updates).some(key => {
-        const typedKey = key as keyof FilterState;
-        return prev[typedKey] !== updates[typedKey];
-      });
+    setFilterState((prev) => {
+      const changed = (Object.keys(updates) as Array<keyof FilterState>).some(
+        (key) => prev[key] !== updates[key],
+      );
+      if (!changed) return prev;
 
-      if (!hasChanges) {
-        return prev;
-      }
-
-      const newState = { ...prev, ...updates };
-      // Save to sessionStorage
-      try {
-        sessionStorage.setItem('ticketFilterState', JSON.stringify(newState));
-      } catch (error) {
-        console.warn('Failed to save filter state:', error);
-      }
-      return newState;
+      const next = { ...prev, ...updates };
+      writeStored('ticketFilterState', next);
+      return next;
     });
   }, []);
 
   const clearFilters = useCallback(() => {
     setFilterState(defaultFilterState);
-    setAllTicketsForSearch(null);
     try {
       sessionStorage.removeItem('ticketFilterState');
-    } catch (error) {
-      console.warn('Failed to clear filter state:', error);
+    } catch {
+      // Non-fatal.
     }
   }, []);
 
-  // Navigation state management functions
   const updateNavigationState = useCallback((updates: Partial<NavigationState>) => {
-    setNavigationState(prev => {
-      const newState = { ...prev, ...updates };
-      // Save to sessionStorage
-      try {
-        sessionStorage.setItem('ticketNavigationState', JSON.stringify(newState));
-      } catch (error) {
-        console.warn('Failed to save navigation state:', error);
-      }
-      return newState;
+    setNavigationState((prev) => {
+      const next = { ...prev, ...updates };
+      writeStored('ticketNavigationState', next);
+      return next;
     });
   }, []);
 
-  const setActiveTab = useCallback((tab: string) => {
-    updateNavigationState({ activeTab: tab });
-  }, [updateNavigationState]);
-
-  const setScrollPosition = useCallback((tab: 'my' | 'new' | 'all', position: number) => {
-    updateNavigationState({
-      scrollPositions: {
-        ...navigationState.scrollPositions,
-        [tab]: position
-      }
-    });
-  }, [navigationState.scrollPositions, updateNavigationState]);
-
-  const setViewMode = useCallback((mode: 'list' | 'grid') => {
-    updateNavigationState({ viewMode: mode });
-  }, [updateNavigationState]);
-
-  const loadAllTicketsForSearch = useCallback(async () => {
-    if (!user) return { new_tickets: [], my_tickets: [], all_tickets: [] };
-
-    performanceMonitor.startTimer('loadAllTicketsForSearch');
-
-    try {
-      // Use unfiltered endpoint for search to get all accessible tickets
-      const response = await apiClient.getTicketsUnfiltered(
-        user.id,
-        1, // Force user_group_id to 1 to bypass pool filtering
-        undefined, // Don't filter by company_id
-        undefined, // Don't filter by location_id
-        undefined, // Don't restrict to specific user
-        undefined  // Don't restrict by sub_user_group_id
-      );
-
-      // Record cache stats for advanced search
-      const ticketCount = response.new_tickets.length + response.my_tickets.length + response.all_tickets.length;
-      const dataSize = new Blob([JSON.stringify(response)]).size;
-      performanceMonitor.recordCacheSize('allTicketsForSearch', dataSize, ticketCount);
-
-      performanceMonitor.endTimer('loadAllTicketsForSearch');
-      return response;
-    } catch (error) {
-      console.error('Failed to fetch all tickets for search:', error);
-      performanceMonitor.endTimer('loadAllTicketsForSearch');
-      return { new_tickets: [], my_tickets: [], all_tickets: [] };
-    }
-  }, [user]);
-
-  // Restore filter state from sessionStorage on mount
-  useEffect(() => {
-    try {
-      const savedState = sessionStorage.getItem('ticketFilterState');
-      if (savedState) {
-        const parsed = JSON.parse(savedState);
-        setFilterState(parsed);
-      }
-    } catch (error) {
-      console.warn('Failed to restore filter state:', error);
-    }
-  }, []);
-
-  // Restore navigation state from sessionStorage on mount
-  useEffect(() => {
-    try {
-      const savedState = sessionStorage.getItem('ticketNavigationState');
-      if (savedState) {
-        const parsed = JSON.parse(savedState);
-        setNavigationState(parsed);
-      }
-    } catch (error) {
-      console.warn('Failed to restore navigation state:', error);
-    }
-  }, []);
-
-  // Initial fetch when user changes
-  useEffect(() => {
-    if (user) {
-      fetchTickets(false);
-    }
-  }, [user, fetchTickets]);
-
-  // Background refresh based on user setting
-  useEffect(() => {
-    if (!user) return;
-
-    const intervalMs = notificationSettings.ticketRefreshInterval * 1000;
-    const interval = setInterval(() => {
-      refreshTickets();
-    }, intervalMs);
-
-    return () => clearInterval(interval);
-  }, [user, refreshTickets, notificationSettings.ticketRefreshInterval]);
-
-  // Refresh when window comes back into focus
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden && user && lastUpdated) {
-        const timeSinceLastUpdate = Date.now() - lastUpdated.getTime();
-        // Refresh if it's been more than 1 minute since last update
-        if (timeSinceLastUpdate > 60000) {
-          refreshTickets();
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [user, lastUpdated, refreshTickets]);
-
-  const value = {
-    tickets,
-    isLoading,
-    isRefreshing,
-    lastUpdated,
-    refreshTickets,
-    loadAllTicketsForSearch,
-    updateTicket,
-    addTicket,
-    // Filter state management
-    filterState,
-    updateFilterState,
-    clearFilters,
-    // Navigation state management
-    navigationState,
-    updateNavigationState,
-    setActiveTab,
-    setScrollPosition,
-    setViewMode,
-    // Additional data for filtering
-    allTicketsForSearch,
-    setAllTicketsForSearch,
-    customers,
-    setCustomers,
-  };
-
-  return (
-    <TicketsContext.Provider value={value}>
-      {children}
-    </TicketsContext.Provider>
+  const setActiveTab = useCallback(
+    (tab: string) => updateNavigationState({ activeTab: tab }),
+    [updateNavigationState],
   );
+
+  const setScrollPosition = useCallback(
+    (tab: 'my' | 'new' | 'all', position: number) => {
+      setNavigationState((prev) => {
+        const next = {
+          ...prev,
+          scrollPositions: { ...prev.scrollPositions, [tab]: position },
+        };
+        writeStored('ticketNavigationState', next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const setViewMode = useCallback(
+    (mode: 'list' | 'grid') => updateNavigationState({ viewMode: mode }),
+    [updateNavigationState],
+  );
+
+  const value = useMemo<TicketsContextType>(
+    () => ({
+      tickets,
+      counts,
+      isLoading,
+      syncStatus,
+      refreshTickets,
+      filterState,
+      updateFilterState,
+      clearFilters,
+      navigationState,
+      setActiveTab,
+      setScrollPosition,
+      setViewMode,
+      customers,
+      setCustomers,
+    }),
+    [
+      tickets,
+      counts,
+      isLoading,
+      syncStatus,
+      refreshTickets,
+      filterState,
+      updateFilterState,
+      clearFilters,
+      navigationState,
+      setActiveTab,
+      setScrollPosition,
+      setViewMode,
+      customers,
+    ],
+  );
+
+  return <TicketsContext.Provider value={value}>{children}</TicketsContext.Provider>;
 }
 
 export function useTickets() {

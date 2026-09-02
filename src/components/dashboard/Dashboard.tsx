@@ -3,8 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiClient } from '@/lib/api';
-import { cache } from '@/lib/cache';
+import { onSyncChanged, queryTickets } from '@/lib/sync';
 import { compareTicketDates } from '@/lib/ticketDate';
 import { Ticket } from '@/types/api';
 import {
@@ -32,60 +31,31 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
 
-  useEffect(() => {
-    fetchTickets();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- known stale-dep bug, fixed in Phase 04. Do not "fix" by adding the deps: these callbacks are recreated every render, so that loops.
-  }, [user]);
-
-  const fetchTickets = useCallback(async (forceRefresh = false) => {
-    if (!user) return;
-
-    const cacheKey = `dashboard_tickets_${user.id}`;
-
-    // Try to get from cache first
-    if (!forceRefresh) {
-      const cachedData = cache.get<typeof tickets>(cacheKey);
-      if (cachedData) {
-        setTickets(cachedData);
-
-        // Build activity from cached data
-        const allTickets = [...cachedData.my_tickets, ...cachedData.new_tickets, ...cachedData.all_tickets];
-        const activities = allTickets
-          .sort((a, b) => compareTicketDates(b.created_at, a.created_at))
-          .slice(0, 10)
-          .map(ticket => ({
-            id: ticket.id,
-            type: 'ticket_created',
-            ticket,
-            timestamp: ticket.created_at,
-            description: `Ticket #${ticket.id} created`,
-          }));
-        setRecentActivity(activities);
-        setIsLoading(false);
-        return;
-      }
-    }
-
+  // Reads the local store rather than calling getTickets itself.
+  //
+  // The dashboard used to run its own fetch with its own three-minute cache, on
+  // top of the one TicketsContext already ran — two independent pulls of every
+  // open ticket per window. It now shares the single sync the whole app uses,
+  // and deliberately queries unfiltered so the stats are not skewed by whatever
+  // filters happen to be set on the ticket list.
+  const loadFromStore = useCallback(async () => {
     try {
-      const response = await apiClient.getTickets(
-        user.id,
-        user.user_group_id,
-        user.company_id,
-        user.location_id,
-        user.id,
-        user.sub_user_group_id
-      );
-      setTickets(response);
+      const [newTickets, myTickets, allTickets] = await Promise.all([
+        queryTickets({ bucket: 'new' }),
+        queryTickets({ bucket: 'mine' }),
+        queryTickets({ bucket: 'all' }),
+      ]);
 
-      // Cache the response for 3 minutes
-      cache.set(cacheKey, response, 3 * 60 * 1000);
+      setTickets({
+        new_tickets: newTickets,
+        my_tickets: myTickets,
+        all_tickets: allTickets,
+      });
 
-      // Fetch recent activity from all tickets
-      const allTickets = [...response.my_tickets, ...response.new_tickets, ...response.all_tickets];
-      const activities = allTickets
+      const activities = [...myTickets, ...newTickets, ...allTickets]
         .sort((a, b) => compareTicketDates(b.created_at, a.created_at))
         .slice(0, 10)
-        .map(ticket => ({
+        .map((ticket) => ({
           id: ticket.id,
           type: 'ticket_created',
           ticket,
@@ -94,11 +64,32 @@ export function Dashboard({ onTicketSelect }: DashboardProps) {
         }));
       setRecentActivity(activities);
     } catch (error) {
-      console.error('Failed to fetch tickets:', error);
+      console.error('Failed to read tickets from the local store:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [user]);
+  }, []);
+
+  useEffect(() => {
+    void loadFromStore();
+  }, [loadFromStore]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void onSyncChanged(() => {
+      void loadFromStore();
+    }).then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, [loadFromStore]);
 
   const totalTickets = useMemo(
     () => tickets.new_tickets.length + tickets.my_tickets.length + tickets.all_tickets.length,

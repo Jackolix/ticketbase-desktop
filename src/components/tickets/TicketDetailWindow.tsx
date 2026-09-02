@@ -190,21 +190,6 @@ export function TicketDetailWindow({ ticket, onBack }: TicketDetailWindowProps) 
     return 'No description available';
   };
 
-  // Helper function to safely render values that might be objects
-  const safeRender = (value: any): string => {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number') return String(value);
-    if (typeof value === 'object') {
-      // If it's an object, try common property names
-      if ('filename' in value) return value.filename;
-      if ('name' in value) return value.name;
-      if ('value' in value) return value.value;
-      return JSON.stringify(value);
-    }
-    return String(value);
-  };
-
   const handleDownloadAttachment = async (filename: string) => {
     setDownloadingFiles(prev => new Set(prev).add(filename));
     
@@ -289,14 +274,7 @@ export function TicketDetailWindow({ ticket, onBack }: TicketDetailWindowProps) 
                         Attachments
                       </h4>
                       <div className="space-y-2">
-                        {ticket.attachments.map((attachment, index) => {
-                          let filename = '';
-                          if (typeof attachment === 'string') {
-                            filename = attachment;
-                          } else if (attachment && typeof attachment === 'object') {
-                            // Handle object attachments - extract filename from various possible properties
-                            filename = safeRender(attachment.filename || attachment.attachment || attachment);
-                          }
+                        {ticket.attachments.map((filename, index) => {
                           return (
                             <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded hover:bg-muted/80 transition-colors">
                               <Paperclip className="h-4 w-4 text-muted-foreground" />

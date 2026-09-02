@@ -48,9 +48,15 @@ export interface Ticket {
   ticketCreator: string;
   ticketUser: string;
   ticketUserPhone: string;
-  playStatus?: string;
+  /** Raw player state from the backend: 1 play, 2 pause, 3 resume, 4 stop. */
+  playStatus: number | null;
   ticketTerminatedUser: string;
-  attachments: (string | { attachment?: string; filename?: string; path?: string })[];
+  /**
+   * Filenames only. The sync core normalises the backend's two shapes (a list
+   * of filenames from getTickets, a raw JSON column from getTicketById) into
+   * one, so this is no longer a union that callers have to narrow.
+   */
+  attachments: string[];
   subject: string;
   priority: string;
   index: number;

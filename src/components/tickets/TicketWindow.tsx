@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiClient } from '@/lib/api';
-import { transformTicketById } from '@/lib/ticketTransform';
+import { getTicket } from '@/lib/sync';
 import { Ticket } from '@/types/api';
 import { TicketDetailWindow } from './TicketDetailWindow';
 
@@ -23,11 +22,9 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
     setError(null);
     
     try {
-      const response = await apiClient.getTicketById(parseInt(ticketId, 10));
-      if (response.result === 'success' && response.tickets) {
-        const rawTicket = response.tickets;
-        
-        setTicket(transformTicketById(rawTicket));
+      const loaded = await getTicket(parseInt(ticketId, 10));
+      if (loaded) {
+        setTicket(loaded);
       } else {
         setError('Ticket not found');
       }

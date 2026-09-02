@@ -25,7 +25,7 @@ interface DebugPanelProps {
 export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
   const [stats, setStats] = useState(performanceMonitor.getStats());
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const { filterState, allTicketsForSearch, tickets, customers } = useTickets();
+  const { filterState, tickets, customers, syncStatus, counts } = useTickets();
 
   // Refresh stats every 2 seconds
   useEffect(() => {
@@ -58,7 +58,6 @@ export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
 
   const contextDataSizes = {
     tickets: calculateDataSize(tickets),
-    allTicketsForSearch: calculateDataSize(allTicketsForSearch),
     customers: calculateDataSize(customers),
     filterState: calculateDataSize(filterState)
   };
@@ -242,14 +241,28 @@ export function DebugPanel({ isVisible, onClose }: DebugPanelProps) {
                 </Card>
 
                 <Card className="p-2">
-                  <div className="text-xs font-medium">Advanced Search</div>
+                  <div className="text-xs font-medium">Sync</div>
                   <div className="text-xs text-muted-foreground mt-1 space-y-1">
-                    <div>Loaded: {allTicketsForSearch ? 'Yes' : 'No'}</div>
-                    {allTicketsForSearch && (
-                      <>
-                        <div>Total: {allTicketsForSearch.new_tickets.length + allTicketsForSearch.my_tickets.length + allTicketsForSearch.all_tickets.length} tickets</div>
-                        <div>Size: {formatBytes(contextDataSizes.allTicketsForSearch)}</div>
-                      </>
+                    <div>State: {syncStatus?.state ?? 'unknown'}</div>
+                    <div>
+                      Last sync:{' '}
+                      {syncStatus?.lastSyncedAt
+                        ? new Date(syncStatus.lastSyncedAt).toLocaleTimeString()
+                        : 'never'}
+                    </div>
+                    <div>Stored: {counts.new + counts.mine + counts.all} bucket entries</div>
+                    {/* Non-zero means the backend's own catch block returned
+                        nulls mid-array, not that we lost rows. */}
+                    {syncStatus && syncStatus.droppedLastSync > 0 && (
+                      <div className="text-destructive">
+                        Server dropped: {syncStatus.droppedLastSync}
+                      </div>
+                    )}
+                    {syncStatus?.lastError && (
+                      <div className="text-destructive break-words">
+                        Error: {syncStatus.lastError}
+                        {syncStatus.retrying ? ' (retrying)' : ''}
+                      </div>
                     )}
                   </div>
                 </Card>

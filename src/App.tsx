@@ -27,13 +27,12 @@ import {
   BreadcrumbPage,
 } from "@/components/ui/breadcrumb";
 import { Ticket } from "./types/api";
-import { apiClient } from "./lib/api";
-import { transformTicketById } from "./lib/ticketTransform";
+import { getTicket } from "./lib/sync";
 import { WindowManager } from "./lib/windowManager";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
-  const { setActiveTab, tickets, allTicketsForSearch, filterState } = useTickets();
+  const { setActiveTab, tickets } = useTickets();
   const [currentView, setCurrentView] = useState("dashboard");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
@@ -90,16 +89,15 @@ function AppContent() {
   const loadTicketById = async (ticketId: number) => {
     setIsLoadingTicket(true);
     try {
-      const response = await apiClient.getTicketById(ticketId);
-      if (response.result === 'success' && response.tickets) {
-        const rawTicket = response.tickets;
-        
-        const transformedTicket = transformTicketById(rawTicket);
-
-        setSelectedTicket(transformedTicket);
+      // Served from the local store when the ticket has been synced, which is
+      // both instant and complete — the network fallback loses attachments,
+      // pool and message count because getTicketById loads fewer relations.
+      const ticket = await getTicket(ticketId);
+      if (ticket) {
+        setSelectedTicket(ticket);
         setCurrentView("tickets");
       } else {
-        console.error('Failed to load ticket:', response);
+        console.error('Ticket not found:', ticketId);
         // Fallback to dashboard if ticket not found
         setCurrentView("dashboard");
         setSelectedTicket(null);
@@ -124,25 +122,15 @@ function AppContent() {
   };
 
   const handleTicketSelect = (ticket: Ticket, preserveCurrentTab?: boolean) => {
-    // Only determine which tab this ticket belongs to if we're not preserving the current tab
+    // Pick the tab the ticket actually lives in.
+    //
+    // This used to branch on whether an "advanced search" had loaded a second,
+    // wider copy of the ticket data. The store makes every synced ticket
+    // available to the normal lists, so there is only one source to check.
     if (!preserveCurrentTab) {
-      // First check if we're using advanced filters and have expanded ticket data
-      let isMyTicket = false;
-      let isNewTicket = false;
-
-      if (filterState.customerFilter && allTicketsForSearch) {
-        // When using advanced filters, check the expanded ticket data
-        isMyTicket = allTicketsForSearch.my_tickets.some(t => t.id === ticket.id);
-        isNewTicket = allTicketsForSearch.new_tickets.some(t => t.id === ticket.id);
-      } else {
-        // For normal browsing, check the main ticket lists
-        isMyTicket = tickets.my_tickets.some(t => t.id === ticket.id);
-        isNewTicket = tickets.new_tickets.some(t => t.id === ticket.id);
-      }
-
-      if (isMyTicket) {
+      if (tickets.my_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('my');
-      } else if (isNewTicket) {
+      } else if (tickets.new_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('new');
       } else {
         setActiveTab('all');
