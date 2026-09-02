@@ -1,0 +1,40 @@
+name: Quality
+
+# Fast feedback on every push: lint, typecheck and unit tests. No Rust
+# toolchain and no bundling, so this finishes in well under a minute — the
+# full cross-platform build stays in build.yml.
+
+on:
+  push:
+    branches: [main, master, 'rebuild/**']
+  pull_request:
+    branches: [main, master, 'rebuild/**']
+
+concurrency:
+  group: 'quality-${{ github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
