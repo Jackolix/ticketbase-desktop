@@ -52,7 +52,7 @@ function makeTicket(i: number) {
 
   return {
     id: 4700 + i,
-    description: `${summary}. Ausführliche Beschreibung des gemeldeten Problems.`,
+    description: i % 3 === 0 ? `${summary}. Ausführliche Beschreibung des gemeldeten Problems.` : '',
     status,
     status_id: 3,
     summary,
@@ -82,7 +82,31 @@ function makeTicket(i: number) {
     created_at: backendDate(i % 20, 8 + (i % 9), (i * 7) % 60),
     ticket_start: scheduledToday ? backendDate(0, 8 + (i % 9), 0) : '',
     ticketMessagesCount: i % 6 === 0 ? 2 : 0,
-    template_data: '',
+    // Every third ticket carries a template, so the detail page's form
+    // rendering is exercised in the preview.
+    template_data:
+      i % 3 === 1
+        ? JSON.stringify({
+            'Wo befindet sich der Virus': ['Lokaler PC / Notebook'],
+            'Wie viele sind betroffen?': 'Ein Arbeitsplatz',
+            'Bitte geben Sie weitere Informationen ein':
+              'Es gibt keinen Virus, aber auf meinem Laptop ist die Lizenz für McAfee nicht mehr aktiv.\nBitte prüfen und ggf. verlängern.',
+          })
+        : i % 3 === 2
+          ? JSON.stringify({
+              Titel: '',
+              Anrede: 'Herr',
+              Vorname: 'Ayyub',
+              Nachname: 'Abodji',
+              'Eintritts Datum': '2026-10-01',
+              'Initiales Passwort': 'Start1234',
+              'Windows Anmeldename': 'a.abodji@example.test',
+              'Windows Berechtigung': 'wie Frau Nalepa',
+              'GGF Spezielle Ordner': '',
+              'E-Mail Adresse': 'a.abodji@example.test',
+              Anzeigename: 'Ayyub Abodji',
+            })
+          : '',
   };
 }
 
@@ -146,8 +170,33 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
 
 /** Responses for the REST calls that still go through the HTTP plugin. */
 const HTTP_FIXTURES: Array<[RegExp, unknown]> = [
-  [/getTicketData/, { status: 'success', ticket_data: [] }],
-  [/getCheckList/, { status: 'success', check_list: [] }],
+  [/getTicketData/, {
+    status: 'success',
+    ticket_data: [
+      {
+        id: 1, ticket_id: 4700, technician_id: 17, status_id: 3,
+        technician_reply: '<p>Exchange-Warteschlange geprüft, 240 Nachrichten blockiert. Transportregel angepasst.</p>',
+        created_at: '2026-09-01 14:22:00', updated_at: '2026-09-01 14:22:00',
+        service_start: 0, service_end: 0, total_time: 2700,
+        user: { name: 'Anna Weber' }, status_name: 'In Bearbeitung',
+      },
+      {
+        id: 2, ticket_id: 4700, technician_id: 18, status_id: 2,
+        technician_reply: '<p>Rückmeldung vom Kunden abgewartet.</p>',
+        created_at: '2026-08-31 09:10:00', updated_at: '2026-08-31 09:10:00',
+        service_start: 0, service_end: 0, total_time: 900,
+        user: { name: 'Tim Kern' }, status_name: 'Terminiert',
+      },
+    ],
+  }],
+  [/getCheckList/, {
+    status: 'success',
+    check_list: [
+      { id: 1, ticket_id: 4700, user_id: 17, to_do: 'Transportregel prüfen', checked: 1, created_at: '' },
+      { id: 2, ticket_id: 4700, user_id: 17, to_do: 'Kunden informieren', checked: 0, created_at: '' },
+      { id: 3, ticket_id: 4700, user_id: 17, to_do: 'Monitoring nachziehen', checked: 0, created_at: '' },
+    ],
+  }],
   [/getPlayerStatus/, { status: 'success', playerStatus: null }],
   [/getTicketMessages/, { status: 'success', messages: [] }],
   [/getUsersMailSettings/, {

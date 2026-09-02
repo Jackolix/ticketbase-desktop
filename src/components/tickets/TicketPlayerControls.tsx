@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { parseTicketDate } from '@/lib/ticketDate';
+import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
 import { toPlayerState, type PlayerState } from '@/lib/playerStatus';
 import { Ticket } from '@/types/api';
 import {
@@ -140,20 +141,20 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         }
 
         if (response.status === 'exists') {
-          toast.warning('Already in progress', {
-            description: 'Someone else is working on this ticket.',
+          toast.warning('Bereits in Bearbeitung', {
+            description: 'Jemand anderes arbeitet gerade an diesem Ticket.',
           });
           await refreshStatus();
           return;
         }
 
-        toast.error('Could not start the timer', {
-          description: response.message || 'The server rejected the request.',
+        toast.error('Zeiterfassung konnte nicht gestartet werden', {
+          description: response.message || 'Der Server hat die Anfrage abgelehnt.',
         });
       } catch (error) {
         console.error('Failed to start ticket:', error);
-        toast.error('Could not start the timer', {
-          description: 'Check your connection and try again.',
+        toast.error('Zeiterfassung konnte nicht gestartet werden', {
+          description: 'Verbindung prüfen und erneut versuchen.',
         });
       }
     });
@@ -171,11 +172,11 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
           setPlayerState('paused');
           onStatusChange?.();
         } else {
-          toast.error('Could not pause the timer');
+          toast.error('Zeiterfassung konnte nicht pausiert werden');
         }
       } catch (error) {
         console.error('Failed to pause ticket:', error);
-        toast.error('Could not pause the timer');
+        toast.error('Zeiterfassung konnte nicht pausiert werden');
       }
     });
 
@@ -191,11 +192,11 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
           setPlayerState('playing');
           onStatusChange?.();
         } else {
-          toast.error('Could not resume the timer');
+          toast.error('Zeiterfassung konnte nicht fortgesetzt werden');
         }
       } catch (error) {
         console.error('Failed to resume ticket:', error);
-        toast.error('Could not resume the timer');
+        toast.error('Zeiterfassung konnte nicht fortgesetzt werden');
       }
     });
 
@@ -231,8 +232,8 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         });
 
         if (response.status !== 'success') {
-          toast.error('Could not save your work', {
-            description: response.message || 'The server rejected the entry.',
+          toast.error('Arbeit konnte nicht gespeichert werden', {
+            description: response.message || 'Der Server hat den Eintrag abgelehnt.',
           });
           return;
         }
@@ -243,12 +244,12 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         setIsStopDialogOpen(false);
         setStopMessage('');
         setCustomTime('');
-        toast.success(`Saved ${submittedMinutes || trackedMinutes} minutes to ticket #${ticket.id}`);
+        toast.success(`${submittedMinutes || trackedMinutes} Min. auf Ticket #${ticket.id} gebucht`);
         onStatusChange?.();
       } catch (error) {
         console.error('Failed to stop ticket and save work:', error);
-        toast.error('Could not save your work', {
-          description: 'Nothing was recorded. Check your connection and try again.',
+        toast.error('Arbeit konnte nicht gespeichert werden', {
+          description: 'Es wurde nichts gebucht. Verbindung prüfen und erneut versuchen.',
         });
       }
     });
@@ -268,7 +269,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         <CardTitle className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock className="h-5 w-5" />
-            Ticket Timer
+            Zeiterfassung
           </div>
           <Badge variant={STATUS_BADGE[playerState]}>
             <div className="flex items-center gap-1">
@@ -290,7 +291,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
           {playerState === 'stopped' && (
             <Button onClick={handlePlay} disabled={isBusy} className="flex items-center gap-2">
               {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              Start
+              Starten
             </Button>
           )}
 
@@ -302,14 +303,14 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
               className="flex items-center gap-2"
             >
               {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
-              Pause
+              Pausieren
             </Button>
           )}
 
           {playerState === 'paused' && (
             <Button onClick={handleResume} disabled={isBusy} className="flex items-center gap-2">
               {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Resume
+              Fortsetzen
             </Button>
           )}
 
@@ -323,54 +324,51 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                   className="flex items-center gap-2"
                 >
                   <Square className="h-4 w-4" />
-                  Finish Work
+                  Abschließen
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
-                  <DialogTitle>Finish Work on Ticket #{ticket.id}</DialogTitle>
+                  <DialogTitle>Arbeit an Ticket #{ticket.id} abschließen</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="work-description">Work Description</Label>
+                    <Label htmlFor="work-description">Was wurde gemacht?</Label>
                     <Textarea
                       id="work-description"
-                      placeholder="Describe what you accomplished…"
+                      placeholder="Durchgeführte Arbeiten beschreiben…"
                       value={stopMessage}
                       onChange={(e) => setStopMessage(e.target.value)}
                       rows={4}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="ticket-status">Update Ticket Status</Label>
+                    <Label htmlFor="ticket-status">Neuer Ticketstatus</Label>
                     <Select value={stopStatus} onValueChange={setStopStatus}>
                       <SelectTrigger id="ticket-status">
-                        <SelectValue placeholder="Select status" />
+                        <SelectValue placeholder="Status wählen" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="4">Abgeschlossen</SelectItem>
-                        <SelectItem value="3">Prüfen</SelectItem>
-                        <SelectItem value="2">Terminiert</SelectItem>
-                        <SelectItem value="5">Offen</SelectItem>
-                        <SelectItem value="6">Vor Ort</SelectItem>
-                        <SelectItem value="8">Wieder geöffnet</SelectItem>
-                        <SelectItem value="9">Warten auf Rückmeldung vom Ticketbenutzer</SelectItem>
-                        <SelectItem value="11">Warten auf Rückmeldung (Extern)</SelectItem>
+                        {TICKET_STATUS_OPTIONS.map((option) => (
+                          <SelectItem key={option.id} value={option.id}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="custom-time">Time to Submit (minutes)</Label>
+                    <Label htmlFor="custom-time">Zu buchende Zeit (Minuten)</Label>
                     <Input
                       id="custom-time"
                       type="number"
                       min="0"
-                      placeholder="Enter time in minutes"
+                      placeholder="Minuten"
                       value={customTime}
                       onChange={(e) => setCustomTime(e.target.value)}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Tracked: {formatDuration(elapsedMs)} ({Math.ceil(elapsedMs / 60_000)} minutes)
+                      Erfasst: {formatDuration(elapsedMs)} ({Math.ceil(elapsedMs / 60_000)} Min.)
                     </p>
                   </div>
                 </div>
@@ -380,7 +378,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                     onClick={() => setIsStopDialogOpen(false)}
                     disabled={isBusy}
                   >
-                    Cancel
+                    Abbrechen
                   </Button>
                   <Button onClick={handleStop} disabled={isBusy || !stopMessage.trim()}>
                     {isBusy ? (
@@ -388,7 +386,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                     ) : (
                       <Square className="h-4 w-4 mr-2" />
                     )}
-                    Finish &amp; Save
+                    Abschließen &amp; speichern
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -398,7 +396,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
 
         {scheduledFor && (
           <div className="text-center pt-2 border-t text-sm text-muted-foreground">
-            <p>Scheduled: {scheduledFor}</p>
+            <p>Terminiert: {scheduledFor}</p>
           </div>
         )}
       </CardContent>
@@ -413,15 +411,15 @@ const STATUS_BADGE: Record<PlayerState, 'default' | 'secondary' | 'outline'> = {
 };
 
 const STATUS_LABEL: Record<PlayerState, string> = {
-  playing: 'Running',
-  paused: 'Paused',
-  stopped: 'Stopped',
+  playing: 'Läuft',
+  paused: 'Pausiert',
+  stopped: 'Gestoppt',
 };
 
 const STATUS_HINT: Record<PlayerState, string> = {
-  playing: 'Timer running',
-  paused: 'Timer paused',
-  stopped: 'Timer stopped',
+  playing: 'Zeit läuft',
+  paused: 'Zeit pausiert',
+  stopped: 'Keine Zeit erfasst',
 };
 
 const STATUS_ICON: Record<PlayerState, React.ReactNode> = {
