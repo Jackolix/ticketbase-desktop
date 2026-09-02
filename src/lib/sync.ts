@@ -36,8 +36,14 @@ export type TicketSort =
 
 export interface TicketQuery {
   bucket?: Bucket;
+  /** Free text over summary, description, company name, id and template data. */
   search?: string;
+  /** Exact ticket id. */
+  id?: number;
   companyId?: number;
+  /** Substring match on the company name only, unlike `search`. */
+  companyName?: string;
+  /** Prefix match, so `warten` finds every "Warten auf …" variant. */
   status?: string;
   priority?: string;
   /** Inclusive, ISO `YYYY-MM-DD`. */

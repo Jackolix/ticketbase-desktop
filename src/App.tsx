@@ -8,7 +8,7 @@ import { NotificationProvider } from "./contexts/NotificationContext";
 import { CustomLoginForm } from "./components/auth/CustomLoginForm";
 import { TicketAppSidebar } from "./components/TicketAppSidebar";
 import { Dashboard } from "./components/dashboard/Dashboard";
-import { TicketList } from "./components/tickets/TicketList";
+import { TicketBoard } from "./components/tickets/TicketBoard";
 import { TicketDetail } from "./components/tickets/TicketDetail";
 import { NewTicketForm } from "./components/tickets/NewTicketForm";
 import { Settings } from "./components/settings/Settings";
@@ -33,6 +33,7 @@ import { WindowManager } from "./lib/windowManager";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SyncIndicator } from "./components/SyncIndicator";
 import { Titlebar } from "./components/Titlebar";
+import { CommandPalette } from "./components/CommandPalette";
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -41,19 +42,25 @@ function AppContent() {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
 
-  // Debug panel keyboard shortcut (Ctrl+Shift+D)
+  // Global shortcuts: Ctrl/Cmd+K opens the palette, Ctrl+Shift+D the debug panel.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setShowPalette((open) => !open);
+        return;
+      }
       if (event.ctrlKey && event.shiftKey && event.key === 'D') {
         event.preventDefault();
-        setShowDebugPanel(!showDebugPanel);
+        setShowDebugPanel((open) => !open);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showDebugPanel]);
+  }, []);
 
   // Cleanup temp files on app shutdown
   useEffect(() => {
@@ -219,7 +226,7 @@ function AppContent() {
       case "dashboard":
         return <Dashboard onTicketSelect={handleTicketSelect} />;
       case "tickets":
-        return <TicketList onTicketSelect={handleTicketSelect} />;
+        return <TicketBoard onTicketSelect={handleTicketSelect} />;
       case "new-ticket":
         return <NewTicketForm />;
       case "settings":
@@ -266,6 +273,12 @@ function AppContent() {
           </ErrorBoundary>
         </div>
       </SidebarInset>
+      <CommandPalette
+        open={showPalette}
+        onOpenChange={setShowPalette}
+        onNavigate={handleViewChange}
+        onSelectTicket={(ticket) => handleTicketSelect(ticket)}
+      />
       <UpdateNotification />
       <DebugPanel
         isVisible={showDebugPanel && process.env.NODE_ENV === 'development'}

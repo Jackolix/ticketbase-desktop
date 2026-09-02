@@ -218,14 +218,26 @@ impl Store {
             }
         }
 
+        if let Some(id) = q.id {
+            clauses.push("t.id = ?".into());
+            args.push(Box::new(id));
+        }
+
         if let Some(company_id) = q.company_id {
             clauses.push("t.company_id = ?".into());
             args.push(Box::new(company_id));
         }
 
+        if let Some(name) = q.company_name.as_ref().filter(|s| !s.trim().is_empty()) {
+            clauses.push("lower(t.company_name) LIKE ?".into());
+            args.push(Box::new(format!("%{}%", name.trim().to_lowercase())));
+        }
+
         if let Some(status) = q.status.as_ref().filter(|s| !s.is_empty()) {
-            clauses.push("lower(t.status) = ?".into());
-            args.push(Box::new(status.to_lowercase()));
+            // Prefix match so `status:warten` finds every "Warten auf …" variant
+            // without the user typing the whole label.
+            clauses.push("lower(t.status) LIKE ?".into());
+            args.push(Box::new(format!("{}%", status.to_lowercase())));
         }
 
         if let Some(priority) = q.priority.as_ref().filter(|s| !s.is_empty()) {
@@ -467,7 +479,12 @@ pub enum TicketSort {
 pub struct TicketQuery {
     pub bucket: Option<Bucket>,
     pub search: Option<String>,
+    /// Exact ticket id, from an `id:` term in structured search.
+    pub id: Option<i64>,
     pub company_id: Option<i64>,
+    /// Substring match on the company name, from a `firma:` term. Distinct
+    /// from `search`, which also spans summary, description and template data.
+    pub company_name: Option<String>,
     pub status: Option<String>,
     pub priority: Option<String>,
     pub date_from: Option<String>,

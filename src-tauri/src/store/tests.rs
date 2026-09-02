@@ -279,3 +279,76 @@ fn clear_removes_everything_for_the_next_user() {
 
     assert!(store.query(&TicketQuery::default()).unwrap().is_empty());
 }
+
+#[test]
+fn filters_by_exact_id_for_structured_search() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_all(&[], &[ticket(4812, "a"), ticket(4813, "b")], &[], 1)
+        .unwrap();
+
+    let found = store
+        .query(&TicketQuery {
+            id: Some(4812),
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(found.iter().map(|t| t.id).collect::<Vec<_>>(), vec![4812]);
+}
+
+#[test]
+fn company_name_filter_matches_a_substring() {
+    let store = Store::open_in_memory().unwrap();
+    let mut other = ticket(2, "other");
+    other.company.name = "Stadtwerke Bergheim".into();
+
+    store.replace_all(&[], &[ticket(1, "mine"), other], &[], 1).unwrap();
+
+    let found = store
+        .query(&TicketQuery {
+            company_name: Some("müller".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(found.iter().map(|t| t.id).collect::<Vec<_>>(), vec![1]);
+}
+
+#[test]
+fn company_name_filter_does_not_span_other_columns() {
+    let store = Store::open_in_memory().unwrap();
+    // The summary mentions a company the ticket does not belong to.
+    store
+        .replace_all(&[], &[ticket(1, "Anruf von Stadtwerke Bergheim")], &[], 1)
+        .unwrap();
+
+    let found = store
+        .query(&TicketQuery {
+            company_name: Some("stadtwerke".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Unlike `search`, this is scoped to the company column.
+    assert!(found.is_empty());
+}
+
+#[test]
+fn status_filter_matches_by_prefix() {
+    let store = Store::open_in_memory().unwrap();
+    let mut waiting = ticket(2, "waiting");
+    waiting.status = "Warten auf Rückmeldung (extern)".into();
+
+    store.replace_all(&[], &[ticket(1, "a"), waiting], &[], 1).unwrap();
+
+    // So `status:warten` finds every "Warten auf …" variant.
+    let found = store
+        .query(&TicketQuery {
+            status: Some("warten".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(found.iter().map(|t| t.id).collect::<Vec<_>>(), vec![2]);
+}

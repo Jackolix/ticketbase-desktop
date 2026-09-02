@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Ticket, Company } from '@/types/api';
+import { Ticket } from '@/types/api';
+import { parseSearch } from '@/lib/searchQuery';
 import {
   getSyncStatus,
   getTicketCounts,
@@ -27,22 +28,19 @@ import {
  * that the customer filter used to depend on.
  */
 
+/**
+ * Every filter now lives in the search string — `firma:`, `status:`, `prio:`,
+ * `von:`, `bis:` — parsed into a store query. The separate dropdown fields this
+ * used to carry are gone with the dropdowns.
+ */
 interface FilterState {
   searchTerm: string;
-  statusFilter: string;
-  priorityFilter: string;
-  customerFilter: string;
-  customerSearchTerm: string;
-  dateFromFilter: string;
-  dateToFilter: string;
-  showAdvancedFilters: boolean;
   sortBy: TicketSort;
 }
 
 interface NavigationState {
   activeTab: string;
   scrollPositions: { my: number; new: number; all: number };
-  viewMode: 'list' | 'grid';
 }
 
 interface TicketBuckets {
@@ -69,30 +67,18 @@ interface TicketsContextType {
   navigationState: NavigationState;
   setActiveTab: (tab: string) => void;
   setScrollPosition: (tab: 'my' | 'new' | 'all', position: number) => void;
-  setViewMode: (mode: 'list' | 'grid') => void;
-
-  customers: Company[];
-  setCustomers: (customers: Company[]) => void;
 }
 
 const TicketsContext = createContext<TicketsContextType | undefined>(undefined);
 
 const defaultFilterState: FilterState = {
   searchTerm: '',
-  statusFilter: 'all',
-  priorityFilter: 'all',
-  customerFilter: '',
-  customerSearchTerm: '',
-  dateFromFilter: '',
-  dateToFilter: '',
-  showAdvancedFilters: false,
   sortBy: 'date-desc',
 };
 
 const defaultNavigationState: NavigationState = {
   activeTab: 'my',
   scrollPositions: { my: 0, new: 0, all: 0 },
-  viewMode: 'list',
 };
 
 const emptyBuckets: TicketBuckets = { new_tickets: [], my_tickets: [], all_tickets: [] };
@@ -127,31 +113,19 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   const [navigationState, setNavigationState] = useState<NavigationState>(() =>
     readStored('ticketNavigationState', defaultNavigationState),
   );
-  const [customers, setCustomers] = useState<Company[]>([]);
 
   // Guards against an in-flight query from stale filters overwriting a newer
   // result. Local queries are fast but not instantaneous.
   const queryToken = useRef(0);
 
+  // The board expresses every filter through the search box, so the store
+  // query is derived by parsing it rather than read from a row of dropdowns.
   const baseQuery: Omit<TicketQuery, 'bucket'> = useMemo(
     () => ({
-      search: filterState.searchTerm || undefined,
-      companyId: filterState.customerFilter ? Number(filterState.customerFilter) : undefined,
-      status: filterState.statusFilter !== 'all' ? filterState.statusFilter : undefined,
-      priority: filterState.priorityFilter !== 'all' ? filterState.priorityFilter : undefined,
-      dateFrom: filterState.dateFromFilter || undefined,
-      dateTo: filterState.dateToFilter || undefined,
+      ...parseSearch(filterState.searchTerm).filters,
       sort: filterState.sortBy,
     }),
-    [
-      filterState.searchTerm,
-      filterState.customerFilter,
-      filterState.statusFilter,
-      filterState.priorityFilter,
-      filterState.dateFromFilter,
-      filterState.dateToFilter,
-      filterState.sortBy,
-    ],
+    [filterState.searchTerm, filterState.sortBy],
   );
 
   const loadFromStore = useCallback(async () => {
@@ -276,11 +250,6 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  const setViewMode = useCallback(
-    (mode: 'list' | 'grid') => updateNavigationState({ viewMode: mode }),
-    [updateNavigationState],
-  );
-
   const value = useMemo<TicketsContextType>(
     () => ({
       tickets,
@@ -294,9 +263,6 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
       navigationState,
       setActiveTab,
       setScrollPosition,
-      setViewMode,
-      customers,
-      setCustomers,
     }),
     [
       tickets,
@@ -310,8 +276,6 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
       navigationState,
       setActiveTab,
       setScrollPosition,
-      setViewMode,
-      customers,
     ],
   );
 
