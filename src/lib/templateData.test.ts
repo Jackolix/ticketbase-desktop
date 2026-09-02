@@ -112,3 +112,35 @@ describe('ticketDescriptionText', () => {
     expect(ticketDescriptionText('', '[]')).toBe('Keine Beschreibung vorhanden');
   });
 });
+
+describe('parseTemplateData with omitValues', () => {
+  it('drops a template field that just repeats the description', () => {
+    // Template forms often write their free-text box into `description` as
+    // well, so the same paragraph was rendered twice on the detail page.
+    const raw = JSON.stringify({
+      Description: 'Server antwortet nicht',
+      Standort: 'Werk 2',
+    });
+
+    const fields = parseTemplateData(raw, { omitValues: ['Server antwortet nicht'] });
+    expect(fields.map((f) => f.label)).toEqual(['Standort']);
+  });
+
+  it('ignores whitespace and case when comparing', () => {
+    const raw = JSON.stringify({ Description: '  Server   antwortet NICHT ' });
+    const fields = parseTemplateData(raw, { omitValues: ['Server antwortet nicht'] });
+    expect(fields).toHaveLength(0);
+  });
+
+  it('keeps fields that merely resemble the description', () => {
+    const raw = JSON.stringify({ Notiz: 'Server antwortet nicht mehr seit Montag' });
+    const fields = parseTemplateData(raw, { omitValues: ['Server antwortet nicht'] });
+    expect(fields).toHaveLength(1);
+  });
+
+  it('is unaffected by an empty or absent omit list', () => {
+    const raw = JSON.stringify({ A: 'x' });
+    expect(parseTemplateData(raw, { omitValues: ['', null, undefined] })).toHaveLength(1);
+    expect(parseTemplateData(raw)).toHaveLength(1);
+  });
+});

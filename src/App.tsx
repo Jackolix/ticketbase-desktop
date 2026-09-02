@@ -19,14 +19,8 @@ import { TicketWindow } from "./components/tickets/TicketWindow";
 import { UpdateNotification } from "./components/ui/UpdateNotification";
 import { DebugPanel } from "./components/debug/DebugPanel";
 import { Toaster } from "./components/ui/sonner";
-import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
-import { Separator } from "@/components/ui/separator";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-} from "@/components/ui/breadcrumb";
+import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
+import { PanelLeft } from "lucide-react";
 import { Ticket } from "./types/api";
 import { getTicket } from "./lib/sync";
 import { WindowManager } from "./lib/windowManager";
@@ -43,6 +37,8 @@ function AppContent() {
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
+  // Controlled so the titlebar can toggle it from outside the provider.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Global shortcuts: Ctrl/Cmd+K opens the palette, Ctrl+Shift+D the debug panel.
   useEffect(() => {
@@ -244,27 +240,31 @@ function AppContent() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <Titlebar title="Ticketbase" />
-      <SidebarProvider className="min-h-0 flex-1">
+      {/* The sidebar toggle, current view and sync state live in the window
+          frame, which reclaims the ~48px header row they used to occupy. */}
+      <Titlebar
+        title="Ticketbase"
+        subtitle={getBreadcrumbTitle()}
+        leading={
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-label={sidebarOpen ? 'Navigation einklappen' : 'Navigation ausklappen'}
+            title={sidebarOpen ? 'Navigation einklappen' : 'Navigation ausklappen'}
+            className="inline-flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <PanelLeft className="h-3.5 w-3.5" />
+          </button>
+        }
+      >
+        <SyncIndicator />
+      </Titlebar>
+      <SidebarProvider className="min-h-0 flex-1" open={sidebarOpen} onOpenChange={setSidebarOpen}>
       <TicketAppSidebar currentView={currentView} onViewChange={handleViewChange} />
-      <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
-          <div className="flex items-center gap-2 px-4">
-            <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="mr-2 h-4" />
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{getBreadcrumbTitle()}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
-          </div>
-          <div className="ml-auto px-4">
-            <SyncIndicator />
-          </div>
-        </header>
-        <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+      <SidebarInset className="min-h-0 overflow-hidden">
+        {/* min-h-0 plus overflow-y-auto is what actually lets long pages scroll:
+            without it the flex child grows past the viewport and is clipped. */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <ErrorBoundary
             label={selectedTicket ? `ticket #${selectedTicket.id}` : getBreadcrumbTitle().toLowerCase()}
             resetKey={selectedTicket ? `ticket-${selectedTicket.id}` : currentView}

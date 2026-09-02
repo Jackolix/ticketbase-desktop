@@ -4,6 +4,10 @@ import { Minus, Square, Copy, X } from 'lucide-react';
 
 interface TitlebarProps {
   title: string;
+  /** Rendered before the title — the sidebar toggle, typically. */
+  leading?: ReactNode;
+  /** Context after the title, e.g. the current view. */
+  subtitle?: ReactNode;
   /** Rendered on the right of the drag area, before the window controls. */
   children?: ReactNode;
 }
@@ -19,7 +23,7 @@ interface TitlebarProps {
  * platform's convention. macOS is detected from the user agent rather than the
  * OS plugin, to avoid pulling in a dependency for one boolean.
  */
-export function Titlebar({ title, children }: TitlebarProps) {
+export function Titlebar({ title, leading, subtitle, children }: TitlebarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [isMac] = useState(() => /Mac|iPhone|iPad/.test(navigator.userAgent));
 
@@ -84,16 +88,31 @@ export function Titlebar({ title, children }: TitlebarProps) {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-9 shrink-0 select-none items-center gap-2 border-b bg-sidebar pl-3 text-sidebar-foreground"
+      className="relative z-20 flex h-(--titlebar-height) shrink-0 select-none items-center gap-2 border-b bg-sidebar pl-1.5 text-sidebar-foreground"
     >
       {isMac && controls}
 
-      {/* The label is inert so it never swallows a drag. */}
+      {leading}
+
+      {/* Labels are inert so they never swallow a drag. */}
       <span data-tauri-drag-region className="pointer-events-none text-xs font-medium">
         {title}
       </span>
+      {subtitle && (
+        <>
+          <span data-tauri-drag-region className="pointer-events-none text-muted-foreground">
+            /
+          </span>
+          <span
+            data-tauri-drag-region
+            className="pointer-events-none truncate text-xs text-muted-foreground"
+          >
+            {subtitle}
+          </span>
+        </>
+      )}
 
-      <div data-tauri-drag-region className="flex-1" />
+      <div data-tauri-drag-region className="min-w-8 flex-1" />
 
       {children}
       {!isMac && controls}

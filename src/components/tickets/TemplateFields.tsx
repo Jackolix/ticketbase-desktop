@@ -4,6 +4,8 @@ interface TemplateFieldsProps {
   templateData: string | null | undefined;
   /** Show fields the requester left blank, dimmed. Defaults to hiding them. */
   showEmpty?: boolean;
+  /** Values already shown elsewhere, e.g. the ticket description. */
+  omitValues?: Array<string | null | undefined>;
 }
 
 /**
@@ -14,8 +16,12 @@ interface TemplateFieldsProps {
  * Laying them out as label/value pairs, with long answers given their own
  * block, makes a template ticket scannable instead of a wall of text.
  */
-export function TemplateFields({ templateData, showEmpty = false }: TemplateFieldsProps) {
-  const all = parseTemplateData(templateData);
+export function TemplateFields({
+  templateData,
+  showEmpty = false,
+  omitValues,
+}: TemplateFieldsProps) {
+  const all = parseTemplateData(templateData, { omitValues });
   const fields = showEmpty ? all : all.filter((f) => !f.isEmpty);
 
   if (fields.length === 0) return null;

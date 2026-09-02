@@ -12,6 +12,7 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  Forward,
   History,
   ListTodo,
   Loader2,
@@ -48,6 +49,7 @@ import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
 import { TONE_BADGE, priorityLabel, priorityTone, statusTone } from '@/lib/ticketStatus';
 import { WindowManager } from '@/lib/windowManager';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
+import { ForwardTicketDialog } from './ForwardTicketDialog';
 import { TemplateFields } from './TemplateFields';
 import { TicketMessages } from './TicketMessages';
 import { TicketPlayerControls } from './TicketPlayerControls';
@@ -90,8 +92,11 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
+  const [isForwardOpen, setIsForwardOpen] = useState(false);
 
-  const templateFields = parseTemplateData(ticket.template_data);
+  const templateFields = parseTemplateData(ticket.template_data, {
+    omitValues: [ticket.description],
+  });
   const hasDescription = Boolean(ticket.description?.trim());
 
   const fetchHistory = useCallback(async () => {
@@ -283,9 +288,6 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-xs tabular-nums text-muted-foreground">
-              #{ticket.id}
-            </span>
             <Badge
               variant="outline"
               className={`${TONE_BADGE[statusTone(ticket.status)]} px-1.5 py-0 text-[10px]`}
@@ -317,6 +319,17 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
                 <UserPlus className="h-3.5 w-3.5" />
               )}
               Übernehmen
+            </Button>
+          )}
+          {ticket.my_ticket_id !== 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsForwardOpen(true)}
+              className="h-8 gap-1.5"
+            >
+              <Forward className="h-3.5 w-3.5" />
+              Weiterleiten
             </Button>
           )}
           {variant === 'embedded' ? (
@@ -362,7 +375,7 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
               {templateFields.length > 0 && (
                 <>
                   {hasDescription && <div className="border-t pt-3" />}
-                  <TemplateFields templateData={ticket.template_data} />
+                  <TemplateFields templateData={ticket.template_data} omitValues={[ticket.description]} />
                 </>
               )}
 
@@ -699,6 +712,13 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
           </Card>
         </div>
       </div>
+
+      <ForwardTicketDialog
+        ticket={ticket}
+        open={isForwardOpen}
+        onOpenChange={setIsForwardOpen}
+        onForwarded={() => void fetchHistory()}
+      />
 
       {previewFile && (
         <FilePreviewModal

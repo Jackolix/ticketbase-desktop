@@ -106,7 +106,10 @@ function makeTicket(i: number) {
               'E-Mail Adresse': 'a.abodji@example.test',
               Anzeigename: 'Ayyub Abodji',
             })
-          : '',
+          : JSON.stringify({
+            Description: `${summary}. Ausführliche Beschreibung des gemeldeten Problems.`,
+            Kategorie: 'Sonstiges',
+          }),
   };
 }
 
@@ -212,6 +215,15 @@ const HTTP_FIXTURES: Array<[RegExp, unknown]> = [
   }],
   [/getUserStatus/, { status: 'success', activity: { activeStatus: true, message: 'User Activated' } }],
   [/changeUserStatus/, { status: 'success', activity: { activeStatus: true, message: 'Status Changed' } }],
+  [/getLocationUsers/, {
+    status: 'success',
+    users: [
+      { id: 17, name: 'Anna Weber', email: 'anna.weber@example.test' },
+      { id: 18, name: 'Tim Kern', email: 'tim.kern@example.test' },
+      { id: 19, name: 'Jonas Müller', email: 'jonas.mueller@example.test' },
+      { id: 20, name: 'Lea Schmitt', email: 'lea.schmitt@example.test' },
+    ],
+  }],
   [/getCustomers/, { status: 'success', customers: COMPANIES }],
   [/getTemplates/, { status: 'success', templates: [{ id: 1, name: 'Standard' }] }],
   [/getWikiData/, {

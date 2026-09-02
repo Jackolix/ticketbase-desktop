@@ -37,7 +37,10 @@ const LONG_VALUE = 60;
  * indistinguishable from a broken one as far as rendering is concerned, and
  * neither should throw.
  */
-export function parseTemplateData(raw: string | null | undefined): TemplateField[] {
+export function parseTemplateData(
+  raw: string | null | undefined,
+  options: { omitValues?: Array<string | null | undefined> } = {},
+): TemplateField[] {
   if (!raw || !raw.trim()) return [];
 
   let parsed: unknown;
@@ -50,15 +53,29 @@ export function parseTemplateData(raw: string | null | undefined): TemplateField
   // An empty template serialises as `[]`, not `{}`.
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
 
-  return Object.entries(parsed as Record<string, unknown>).map(([label, rawValue]) => {
-    const value = normaliseValue(rawValue);
-    return {
-      label: label.trim(),
-      value,
-      isEmpty: value.length === 0,
-      isLong: value.length > LONG_VALUE || value.includes('\n'),
-    };
-  });
+  // Templates frequently carry a field that simply repeats the ticket's own
+  // description — the form's free-text box is what populates it — so the same
+  // paragraph ended up rendered twice on the detail page.
+  const omit = new Set(
+    (options.omitValues ?? []).map((value) => collapse(value ?? '')).filter(Boolean),
+  );
+
+  return Object.entries(parsed as Record<string, unknown>)
+    .map(([label, rawValue]) => {
+      const value = normaliseValue(rawValue);
+      return {
+        label: label.trim(),
+        value,
+        isEmpty: value.length === 0,
+        isLong: value.length > LONG_VALUE || value.includes('\n'),
+      };
+    })
+    .filter((field) => !omit.has(collapse(field.value)));
+}
+
+/** Normalises whitespace and case so near-identical text still compares equal. */
+function collapse(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function normaliseValue(value: unknown): string {
