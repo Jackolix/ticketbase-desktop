@@ -13,6 +13,7 @@ import { apiClient } from '@/lib/api';
 import { parseTicketDate } from '@/lib/ticketDate';
 import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
 import { toPlayerState, type PlayerState } from '@/lib/playerStatus';
+import { timerRecord, timerStatus, type Timer } from '@/lib/sync';
 import { Ticket } from '@/types/api';
 import {
   Play,
@@ -34,24 +35,40 @@ const STATUS_POLL_MS = 30_000;
 /**
  * Ticket timer.
  *
- * Elapsed time is derived rather than stored: `baseMs` is the accumulated total
- * as of the last authoritative reading, and `runningSince` is when that reading
- * was taken if the clock was running. The displayed value is the sum.
+ * The server owns *whether* the clock is running; this client owns *how long*
+ * it has been running, because the backend cannot say.
+ * `APITicketPlayerController::getPlayerStatus` computes the elapsed seconds
+ * into `$total_raw_time` and then assigns `$total_raw_time = 0` on the next
+ * line, so that field is always "0"; and `total_time` is a billing figure
+ * rounded up to the customer's block, which `calculateTotalTime` returns as 0
+ * until the first pause. Reading either one on mount is what made a reopened
+ * window start counting from zero.
  *
- * This matters because the previous version kept the running total in state and
- * listed it in its own effect's dependencies, so the 30-second reconcile timer
- * was destroyed and recreated once per second while a timer ran — and
- * refetched status on every tick, which is what tripped the backend's rate
- * limit. Here the tick interval depends only on whether the clock is running.
+ * So elapsed time comes from the local record in SQLite, which both windows
+ * share and which survives a restart. The two are reconciled on every poll:
+ * if the server says the clock is running and we have no record of it — it was
+ * started from the web UI, say — the record is seeded from the server's
+ * rounded total and the display says so, rather than quietly inventing a
+ * number.
+ *
+ * The tick interval depends only on whether the clock is running. An earlier
+ * version listed the running total in that effect's dependencies, so the
+ * reconcile timer was destroyed and recreated once per second and refetched
+ * status on every tick, which is what tripped the backend's rate limit.
  */
 export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerControlsProps) {
   const { user } = useAuth();
   const userId = user?.id;
 
   const [playerState, setPlayerState] = useState<PlayerState>('stopped');
-  const [baseMs, setBaseMs] = useState(0);
-  const [runningSince, setRunningSince] = useState<number | null>(null);
+  const [timer, setTimer] = useState<Timer | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  /**
+   * True when the elapsed time was seeded from the server's rounded total
+   * rather than measured here — the clock was started somewhere this app never
+   * saw. The number is then a lower bound, and the UI says so.
+   */
+  const [isApproximate, setIsApproximate] = useState(false);
 
   const [isBusy, setIsBusy] = useState(false);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
@@ -59,40 +76,82 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
   const [stopStatus, setStopStatus] = useState('4'); // Abgeschlossen
   const [customTime, setCustomTime] = useState('');
 
-  const elapsedMs = useMemo(
-    () => baseMs + (runningSince !== null ? Math.max(0, nowMs - runningSince) : 0),
-    [baseMs, runningSince, nowMs],
-  );
+  // Mirrors the computation in the Rust store, so a tick between polls shows
+  // the same number a fresh read would.
+  const elapsedMs = useMemo(() => {
+    if (!timer) return 0;
+    const current =
+      timer.running && timer.startedAt !== null ? Math.max(0, nowMs - timer.startedAt) : 0;
+    return Math.max(0, timer.accumulatedMs) + current;
+  }, [timer, nowMs]);
 
-  const applyState = useCallback((state: PlayerState, totalMinutes: number) => {
-    setPlayerState(state);
-    setBaseMs(totalMinutes * 60_000);
-    // Anchor to now: the server's total already includes everything up to this
-    // reading, so the clock continues from here.
-    setRunningSince(state === 'playing' ? Date.now() : null);
-    setNowMs(Date.now());
-  }, []);
-
+  /**
+   * Reconciles the server's idea of the state with our record of the elapsed
+   * time.
+   *
+   * The server is authoritative about running/paused/stopped — it is where
+   * another device or the web UI would have changed it. It is not authoritative
+   * about duration, for the reasons in the component docs.
+   */
   const refreshStatus = useCallback(async () => {
     if (!userId) return;
+
+    let serverState: PlayerState = 'stopped';
+    let serverMinutes = 0;
 
     try {
       const response = await apiClient.getPlayerStatus(ticket.id, userId);
       if (response.status !== 'success') return;
 
       const data = response.playerStatus;
-      if (!data) {
-        applyState('stopped', 0);
+      if (data) {
+        serverState = toPlayerState(data.play_status);
+        serverMinutes = data.total_time || 0;
+      }
+    } catch (error) {
+      // A failed poll must not reset a running timer — that would look like
+      // lost work. Keep what we have and try again next tick.
+      console.error('Failed to fetch player status:', error);
+      return;
+    }
+
+    setPlayerState(serverState);
+    setNowMs(Date.now());
+
+    try {
+      if (serverState === 'stopped') {
+        await timerRecord(ticket.id, 'clear');
+        setTimer(null);
+        setIsApproximate(false);
         return;
       }
 
-      applyState(toPlayerState(data.play_status), data.total_time || 0);
+      const local = await timerStatus(ticket.id);
+
+      if (serverState === 'playing') {
+        // Already running locally: leave it alone. Two windows both reconcile,
+        // and the second must not restart the first.
+        if (local?.running) {
+          setTimer(local);
+          return;
+        }
+        if (local === null) setIsApproximate(true);
+        setTimer(await timerRecord(ticket.id, 'resume', serverMinutes * 60_000));
+        return;
+      }
+
+      // Paused server-side.
+      if (local === null) {
+        setIsApproximate(true);
+        await timerRecord(ticket.id, 'resume', serverMinutes * 60_000);
+        setTimer(await timerRecord(ticket.id, 'pause'));
+        return;
+      }
+      setTimer(local.running ? await timerRecord(ticket.id, 'pause') : local);
     } catch (error) {
-      // A failed poll must not reset a running timer to zero — that would look
-      // like lost work. Keep whatever we last knew and try again next tick.
-      console.error('Failed to fetch player status:', error);
+      console.error('Failed to reconcile the local timer:', error);
     }
-  }, [ticket.id, userId, applyState]);
+  }, [ticket.id, userId]);
 
   // Reconcile with the server on mount and periodically, to pick up changes
   // made from the web UI or another device.
@@ -105,13 +164,14 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
   }, [refreshStatus]);
 
   // Tick the display once a second, only while the clock is actually running.
-  // `runningSince` changes only on a real state change, so this interval is
-  // created once per run rather than once per second.
+  // The dependency is a boolean, so this interval is created once per run
+  // rather than once per second.
+  const isTicking = timer?.running ?? false;
   useEffect(() => {
-    if (runningSince === null) return;
+    if (!isTicking) return;
     const interval = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [runningSince]);
+  }, [isTicking]);
 
   const run = useCallback(
     async (action: () => Promise<void>) => {
@@ -133,9 +193,9 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
 
         if (response.status === 'success') {
           setPlayerState('playing');
-          setBaseMs(0);
-          setRunningSince(Date.now());
+          setIsApproximate(false);
           setNowMs(Date.now());
+          setTimer(await timerRecord(ticket.id, 'start'));
           onStatusChange?.();
           return;
         }
@@ -166,10 +226,8 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         // current_state 1 = PLAY
         const response = await apiClient.pause(ticket.id, userId, 1);
         if (response.status === 'success') {
-          // Freeze the accumulated total, then stop the clock.
-          setBaseMs(elapsedMs);
-          setRunningSince(null);
           setPlayerState('paused');
+          setTimer(await timerRecord(ticket.id, 'pause'));
           onStatusChange?.();
         } else {
           toast.error('Zeiterfassung konnte nicht pausiert werden');
@@ -187,9 +245,9 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         // current_state 2 = PAUSE
         const response = await apiClient.resume(ticket.id, userId, 2);
         if (response.status === 'success') {
-          setRunningSince(Date.now());
           setNowMs(Date.now());
           setPlayerState('playing');
+          setTimer(await timerRecord(ticket.id, 'resume'));
           onStatusChange?.();
         } else {
           toast.error('Zeiterfassung konnte nicht fortgesetzt werden');
@@ -239,8 +297,9 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         }
 
         setPlayerState('stopped');
-        setBaseMs(0);
-        setRunningSince(null);
+        await timerRecord(ticket.id, 'clear');
+        setTimer(null);
+        setIsApproximate(false);
         setIsStopDialogOpen(false);
         setStopMessage('');
         setCustomTime('');
@@ -285,6 +344,11 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
             {formatDuration(elapsedMs)}
           </div>
           <p className="text-sm text-muted-foreground">{STATUS_HINT[playerState]}</p>
+          {isApproximate && playerState !== 'stopped' && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Vor dieser Sitzung gestartet — die Zeit ist ein Mindestwert.
+            </p>
+          )}
         </div>
 
         <div className="flex justify-center gap-2">

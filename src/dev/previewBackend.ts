@@ -19,6 +19,21 @@ const COMPANIES = [
   { id: 23, name: 'Hoffmann Bau AG', number: 'K-3390' },
 ];
 
+/**
+ * The customer list behind the search box's suggestions.
+ *
+ * Deliberately wider than the four companies that own tickets, and deliberately
+ * full of names that share a prefix — the whole point of the feature is finding
+ * the right "Müller" without knowing how it was typed into the database.
+ */
+const CUSTOMERS = [
+  ...COMPANIES.map((c) => ({ ...c, zip: '50667', location: 'Köln', passive: 0 })),
+  { id: 31, name: 'MÜLLER & SÖHNE KG', number: 'K-4401', zip: '53111', location: 'Bonn', passive: 0 },
+  { id: 44, name: 'Müllermann Elektro', number: 'K-5120', zip: '50129', location: 'Bergheim', passive: 0 },
+  { id: 57, name: 'Bäckerei Müller', number: 'K-6033', zip: '50931', location: 'Köln', passive: 1 },
+  { id: 61, name: 'Schmidt Metallbau', number: 'K-7712', zip: '51105', location: 'Köln', passive: 0 },
+];
+
 const SUMMARIES: Array<[string, string, string, string]> = [
   ['Exchange-Server nimmt keine Mails an', 'E-Mail', 'VERY_HIGH', 'In Bearbeitung'],
   ['Drucker EG rechts offline nach Update', 'Drucker', 'HIGH', 'Warten auf Rückmeldung (extern)'],
@@ -118,6 +133,61 @@ const TICKETS = Array.from({ length: 24 }, (_, i) => makeTicket(i));
 const MINE = TICKETS.filter((t) => t.my_ticket_id !== 0);
 const POOL = TICKETS.filter((t) => t.my_ticket_id === 0);
 
+/**
+ * The archive, which only fills once something asks for it.
+ *
+ * Modelled on what the real endpoints hand back rather than on the live list:
+ * `getCompanyById` joins none of the relations `getTickets` does, so these
+ * carry no subject, pool or message count, and they are years old.
+ */
+const ARCHIVE: Array<ReturnType<typeof makeTicket>> = [];
+
+interface PreviewTimer {
+  ticketId: number;
+  userId: number;
+  running: boolean;
+  startedAt: number | null;
+  accumulatedMs: number;
+  elapsedMs: number;
+}
+
+const TIMERS = new Map<number, PreviewTimer>();
+
+function timerElapsed(timer: PreviewTimer | undefined, now: number): number {
+  if (!timer) return 0;
+  const current = timer.running && timer.startedAt ? Math.max(0, now - timer.startedAt) : 0;
+  return Math.max(0, timer.accumulatedMs) + current;
+}
+
+function makeArchivedTicket(i: number, companyIndex: number) {
+  const [summary] = SUMMARIES[i % SUMMARIES.length];
+  const company = COMPANIES[companyIndex];
+  const year = 2024 + (i % 2);
+
+  return {
+    ...makeTicket(i),
+    id: 3100 + i,
+    status: 'Abgeschlossen',
+    status_id: 4,
+    subject: '',
+    pool_name: '',
+    ticketMessagesCount: 0,
+    playStatus: null,
+    summary,
+    created_at: `${pad(1 + (i % 27))}-${pad(1 + (i % 12))}-${year} ${pad(8 + (i % 9))}:15`,
+    company: {
+      id: company.id,
+      name: company.name,
+      number: company.number,
+      companyMail: 'it@example.test',
+      companyPhone: '+49 221 5550100',
+      companyZip: '50667',
+      companyAdress: 'Hafenstraße 12',
+      locations: [],
+    },
+  };
+}
+
 function matches(ticket: ReturnType<typeof makeTicket>, query: Record<string, unknown>) {
   if (query.id && ticket.id !== query.id) return false;
 
@@ -128,6 +198,8 @@ function matches(ticket: ReturnType<typeof makeTicket>, query: Record<string, un
       .toLowerCase();
     if (!haystack.includes(needle)) return false;
   }
+
+  if (query.companyId && ticket.company.id !== query.companyId) return false;
 
   if (query.companyName) {
     if (!ticket.company.name.toLowerCase().includes(String(query.companyName).toLowerCase())) {
@@ -148,12 +220,125 @@ function matches(ticket: ReturnType<typeof makeTicket>, query: Record<string, un
 
 const HANDLERS: Record<string, (args: any) => unknown> = {
   query_tickets: ({ query = {} }: any) => {
+    // Archived rows have no bucket, so asking for one never returns them —
+    // exactly as in SQLite, where the bucket join does the excluding.
     const source =
-      query.bucket === 'mine' ? MINE : query.bucket === 'new' ? POOL : TICKETS;
+      query.archived === true
+        ? ARCHIVE
+        : query.bucket === 'mine'
+          ? MINE
+          : query.bucket === 'new'
+            ? POOL
+            : query.archived === undefined
+              ? [...TICKETS, ...ARCHIVE]
+              : TICKETS;
     const rows = source.filter((t) => matches(t, query));
     return query.limit ? rows.slice(0, query.limit) : rows;
   },
-  ticket_counts: () => ({ new: POOL.length, mine: MINE.length, all: TICKETS.length }),
+  ticket_counts: () => ({
+    new: POOL.length,
+    mine: MINE.length,
+    all: TICKETS.length,
+    archive: ARCHIVE.length,
+  }),
+  search_customers: ({ query = '', limit = 8 }: any) => {
+    const needle = String(query).trim().toLowerCase();
+    const rank = (name: string) => {
+      const lower = name.toLowerCase();
+      if (!needle || lower === needle) return 0;
+      return lower.startsWith(needle) ? 1 : 2;
+    };
+
+    return CUSTOMERS.filter(
+      (c) =>
+        !needle ||
+        c.name.toLowerCase().includes(needle) ||
+        c.number.toLowerCase().includes(needle),
+    )
+      .sort(
+        (a, b) =>
+          rank(a.name) - rank(b.name) ||
+          a.passive - b.passive ||
+          (needle ? a.name.length - b.name.length : 0) ||
+          a.name.localeCompare(b.name),
+      )
+      .slice(0, limit);
+  },
+  fetch_company_archive: ({ companyId }: any) => {
+    const index = COMPANIES.findIndex((c) => c.id === companyId);
+    if (index < 0) return { returned: 0, cached: 0, closed: 0 };
+
+    const fetched = Array.from({ length: 9 }, (_, i) => makeArchivedTicket(i, index));
+    for (const ticket of fetched) {
+      if (!ARCHIVE.some((existing) => existing.id === ticket.id)) ARCHIVE.push(ticket);
+    }
+
+    return { returned: fetched.length + 2, cached: fetched.length, closed: fetched.length };
+  },
+  /**
+   * Timers, kept in memory the way the Rust store keeps them on disk.
+   *
+   * The point being exercised is that reopening a ticket does not reset the
+   * clock, so the record has to outlive the component.
+   */
+  timer_status: ({ ticketId }: any) => TIMERS.get(ticketId) ?? null,
+  timer_record: ({ ticketId, action, baseMs }: any) => {
+    const now = Date.now();
+    const existing = TIMERS.get(ticketId);
+
+    if (action === 'clear') {
+      TIMERS.delete(ticketId);
+      return null;
+    }
+
+    if (action === 'start') {
+      TIMERS.set(ticketId, {
+        ticketId,
+        userId: 17,
+        running: true,
+        startedAt: now,
+        accumulatedMs: 0,
+        elapsedMs: 0,
+      });
+    } else if (action === 'pause') {
+      const elapsed = timerElapsed(existing, now);
+      TIMERS.set(ticketId, {
+        ticketId,
+        userId: 17,
+        running: false,
+        startedAt: null,
+        accumulatedMs: elapsed,
+        elapsedMs: elapsed,
+      });
+    } else if (action === 'resume' && !existing?.running) {
+      TIMERS.set(ticketId, {
+        ticketId,
+        userId: 17,
+        running: true,
+        startedAt: now,
+        accumulatedMs: existing?.accumulatedMs ?? Math.max(0, baseMs ?? 0),
+        elapsedMs: 0,
+      });
+    }
+
+    const current = TIMERS.get(ticketId);
+    return current ? { ...current, elapsedMs: timerElapsed(current, now) } : null;
+  },
+  fetch_ticket_by_number: ({ ticketId }: any) => {
+    const known = [...TICKETS, ...ARCHIVE].find((t) => t.id === ticketId);
+    if (known) return known;
+
+    // The case the command exists for: a closed ticket the sync has never
+    // seen and never could. getTicketById returns it all the same.
+    if (ticketId >= 3100 && ticketId < 3200) {
+      const fetched = makeArchivedTicket(ticketId - 3100, ticketId % COMPANIES.length);
+      fetched.id = ticketId;
+      ARCHIVE.push(fetched);
+      return fetched;
+    }
+
+    return null;
+  },
   get_ticket: ({ ticketId }: any) => TICKETS.find((t) => t.id === ticketId) ?? TICKETS[0],
   sync_status: () => ({
     state: 'ok',
@@ -161,7 +346,12 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
     lastError: null,
     retrying: false,
     droppedLastSync: 0,
-    counts: { new: POOL.length, mine: MINE.length, all: TICKETS.length },
+    counts: {
+      new: POOL.length,
+      mine: MINE.length,
+      all: TICKETS.length,
+      archive: ARCHIVE.length,
+    },
   }),
   sync_start: () => null,
   sync_stop: () => null,
@@ -171,8 +361,14 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   show_ticket: () => null,
 };
 
-/** Responses for the REST calls that still go through the HTTP plugin. */
-const HTTP_FIXTURES: Array<[RegExp, unknown]> = [
+/**
+ * Responses for the REST calls that still go through the HTTP plugin.
+ *
+ * A fixture may be a function so it can reflect state the preview has changed
+ * — the player status has to agree with the mock timers, or reopening a ticket
+ * would look broken here in a way it is not in the real app.
+ */
+const HTTP_FIXTURES: Array<[RegExp, unknown | ((url: string) => unknown)]> = [
   [/getTicketData/, {
     status: 'success',
     ticket_data: [
@@ -200,7 +396,32 @@ const HTTP_FIXTURES: Array<[RegExp, unknown]> = [
       { id: 3, ticket_id: 4700, user_id: 17, to_do: 'Monitoring nachziehen', checked: 0, created_at: '' },
     ],
   }],
-  [/getPlayerStatus/, { status: 'success', playerStatus: null }],
+  [/getPlayerStatus/, () => {
+    // The request body is not visible to a URL matcher, and the preview only
+    // ever runs one timer at a time, so any running timer stands for this one.
+    const running = [...TIMERS.values()].find((timer) => timer.running);
+    const paused = [...TIMERS.values()].find((timer) => !timer.running);
+    const active = running ?? paused;
+
+    return {
+      status: 'success',
+      playerStatus: active
+        ? {
+            id: active.ticketId,
+            play_status: running ? 1 : 2,
+            status_id: 13,
+            // Deliberately 0, exactly as the real backend reports it for a
+            // running timer: calculateTotalTime returns 0 until the first
+            // pause, and total_time_raw is overwritten with 0 before it is
+            // returned. This is what the local record exists to survive.
+            total_time: 0,
+            total_time_raw: '0',
+            tmp_description: '',
+            ticket_status_id: 13,
+          }
+        : null,
+    };
+  }],
   [/getTicketMessages/, { status: 'success', messages: [] }],
   [/getUsersMailSettings/, {
     status: 'success',
@@ -344,7 +565,10 @@ async function handleCommand(cmd: string, args: any): Promise<unknown> {
     const match = HTTP_FIXTURES.find(([pattern]) => pattern.test(url));
     if (!match) console.warn('[preview] no fixture for', url);
 
-    const bytes = Array.from(new TextEncoder().encode(JSON.stringify(match ? match[1] : { status: 'success' })));
+    const fixture = match ? match[1] : { status: 'success' };
+    const body = typeof fixture === 'function' ? (fixture as (u: string) => unknown)(url) : fixture;
+
+    const bytes = Array.from(new TextEncoder().encode(JSON.stringify(body)));
     const emit = (window as any).__TAURI_INTERNALS__.runCallback;
 
     // A trailing 0 marks a data chunk; a lone 1 closes the stream.

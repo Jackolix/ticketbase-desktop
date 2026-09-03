@@ -27,7 +27,9 @@ tauri-plugin-notification = "2"
 tauri-plugin-http = "2.5"
 
 # Sync core
-rusqlite = { version = "0.32", features = ["bundled"] }
+# "functions" registers ulower(), a Unicode-aware lower() — SQLite's own
+# only folds ASCII, so "MÜLLER" would not match a search for "müller".
+rusqlite = { version = "0.32", features = ["bundled", "functions"] }
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 thiserror = "2"

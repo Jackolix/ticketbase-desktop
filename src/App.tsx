@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider, useTickets } from "./contexts/TicketsContext";
+import { ShortcutHelp } from "./components/ShortcutHelp";
 import { UpdaterProvider } from "./contexts/UpdaterContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import { CustomLoginForm } from "./components/auth/CustomLoginForm";
@@ -147,8 +148,12 @@ function AppContent() {
         setActiveTab('my');
       } else if (tickets.new_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('new');
-      } else {
+      } else if (tickets.all_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('all');
+      } else {
+        // Closed, or otherwise outside every live list — going back would
+        // otherwise land on a tab the ticket is not in.
+        setActiveTab('archive');
       }
     }
 
@@ -215,7 +220,13 @@ function AppContent() {
   const renderContent = () => {
     // If a ticket is selected, always show the ticket detail view
     if (selectedTicket) {
-      return <TicketDetail ticket={selectedTicket} onBack={handleTicketBack} />;
+      return (
+        <TicketDetail
+          ticket={selectedTicket}
+          onBack={handleTicketBack}
+          onSelectTicket={(next) => handleTicketSelect(next, true)}
+        />
+      );
     }
 
     switch (currentView) {
@@ -264,7 +275,20 @@ function AppContent() {
       <SidebarInset className="min-h-0 overflow-hidden">
         {/* min-h-0 plus overflow-y-auto is what actually lets long pages scroll:
             without it the flex child grows past the viewport and is clipped. */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {/* The ticket board scrolls its own list — it has a sticky table
+            header and remembers an offset per tab, neither of which works if
+            an outer container is the thing actually scrolling. Everywhere
+            else, this is the scroller. */}
+        <div
+          className={`min-h-0 flex-1 p-4 ${
+            currentView === 'tickets' && !selectedTicket
+              ? // `flex flex-col` is load-bearing: without it this is a block
+                // container, the board's own `flex-1` means nothing, and it
+                // grows to fit every row instead of scrolling inside itself.
+                'flex flex-col overflow-hidden'
+              : 'overflow-y-auto'
+          }`}
+        >
           <ErrorBoundary
             label={selectedTicket ? `ticket #${selectedTicket.id}` : getBreadcrumbTitle().toLowerCase()}
             resetKey={selectedTicket ? `ticket-${selectedTicket.id}` : currentView}
@@ -279,6 +303,7 @@ function AppContent() {
         onNavigate={handleViewChange}
         onSelectTicket={(ticket) => handleTicketSelect(ticket)}
       />
+      <ShortcutHelp />
       <UpdateNotification />
       <DebugPanel
         isVisible={showDebugPanel && process.env.NODE_ENV === 'development'}

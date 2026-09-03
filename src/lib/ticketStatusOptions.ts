@@ -15,3 +15,11 @@ export const TICKET_STATUS_OPTIONS: Array<{ id: string; label: string }> = [
   { id: '9', label: 'Warten auf Rückmeldung vom Ticketbenutzer' },
   { id: '11', label: 'Warten auf Rückmeldung (Extern)' },
 ];
+
+/**
+ * The id of "Abgeschlossen".
+ *
+ * Load-bearing beyond a label: `getTicketsQuery` filters `status_id != 4`, so a
+ * ticket reaching this value leaves every list the sync can see.
+ */
+export const CLOSED_STATUS_ID = 4;

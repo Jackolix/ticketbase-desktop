@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareTicketDates, parseTicketDate } from './ticketDate';
+import { compareTicketDates, formatTicketAge, parseTicketDate } from './ticketDate';
 
 describe('parseTicketDate', () => {
   it('reads the backend d-m-Y H:i format day-first', () => {
@@ -69,5 +69,42 @@ describe('compareTicketDates', () => {
 
   it('treats two unparseable dates as equal', () => {
     expect(compareTicketDates('', 'garbage')).toBe(0);
+  });
+});
+
+describe('formatTicketAge', () => {
+  // The board's own format, so the parse path under test is the real one.
+  const now = new Date(2026, 8, 3, 12, 0);
+
+  it('reads the backend day-first format rather than guessing', () => {
+    expect(formatTicketAge('03-09-2026 11:30', now)).toBe('vor 30 Min.');
+  });
+
+  it('steps up to the coarsest unit that still says something', () => {
+    // The backend format is minute-precision, so "under a minute" is the
+    // same minute.
+    expect(formatTicketAge('03-09-2026 12:00', now)).toBe('gerade eben');
+    expect(formatTicketAge('03-09-2026 11:59', now)).toBe('vor 1 Min.');
+    expect(formatTicketAge('03-09-2026 09:00', now)).toBe('vor 3 Std.');
+    expect(formatTicketAge('01-09-2026 12:00', now)).toBe('vor 2 Tagen');
+    expect(formatTicketAge('03-06-2026 12:00', now)).toBe('vor 3 Monaten');
+    expect(formatTicketAge('03-09-2024 12:00', now)).toBe('vor 2 Jahren');
+  });
+
+  it('uses the singular where German needs it', () => {
+    expect(formatTicketAge('02-09-2026 12:00', now)).toBe('vor 1 Tag');
+    expect(formatTicketAge('03-08-2026 12:00', now)).toBe('vor 1 Monat');
+    expect(formatTicketAge('03-09-2025 12:00', now)).toBe('vor 1 Jahr');
+  });
+
+  it('says nothing for a future timestamp instead of counting backwards', () => {
+    // Clock skew between the server and this machine is not worth rendering as
+    // "vor -2 Min.".
+    expect(formatTicketAge('03-09-2026 12:30', now)).toBeNull();
+  });
+
+  it('says nothing for a timestamp it cannot read', () => {
+    expect(formatTicketAge('', now)).toBeNull();
+    expect(formatTicketAge('irgendwann', now)).toBeNull();
   });
 });

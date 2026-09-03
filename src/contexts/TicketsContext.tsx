@@ -2,13 +2,17 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Ticket } from '@/types/api';
 import { parseSearch } from '@/lib/searchQuery';
 import {
+  fetchCompanyArchive,
+  fetchTicketByNumber,
   getSyncStatus,
   getTicketCounts,
   onSyncChanged,
   onSyncStatus,
   queryTickets,
   syncRefresh,
+  type ArchiveFetch,
   type BucketCounts,
+  type Customer,
   type SyncStatus,
   type TicketQuery,
   type TicketSort,
@@ -26,6 +30,19 @@ import {
  * replaces the old client-side filter over whatever happened to be loaded — and
  * with it the `/testGetTickets` call and the `user_group_id = 1` pool bypass
  * that the customer filter used to depend on.
+ *
+ * Closed tickets are the one thing syncing cannot reach. `getTicketsQuery`
+ * filters `status_id != 4`, so searching for a closed ticket — or for
+ * everything a customer ever had — used to come back empty however long the app
+ * had been running. Two fetches fill that gap, and they are deliberately not
+ * symmetrical:
+ *
+ *   * A ticket number resolves itself. `getTicketById` is one cheap row, so
+ *     when a search names a number the store does not have, it is fetched.
+ *   * A customer's history does not. `getCompanyById` returns every ticket the
+ *     customer ever had — and, because four further relations are declared
+ *     identically to the first, returns them five times over. That one waits
+ *     for the user to ask.
  */
 
 /**
@@ -38,15 +55,29 @@ interface FilterState {
   sortBy: TicketSort;
 }
 
+/** The archive is a fourth list, but not a fourth server-side bucket. */
+export type BoardTab = 'my' | 'new' | 'all' | 'archive';
+
 interface NavigationState {
   activeTab: string;
-  scrollPositions: { my: number; new: number; all: number };
+  scrollPositions: Record<BoardTab, number>;
 }
 
 interface TicketBuckets {
   new_tickets: Ticket[];
   my_tickets: Ticket[];
   all_tickets: Ticket[];
+  /** Closed tickets pulled in on demand. */
+  archive_tickets: Ticket[];
+}
+
+/** Progress of the last on-demand archive fetch. */
+export interface ArchiveState {
+  status: 'idle' | 'loading' | 'error';
+  /** The customer the last fetch covered, for the empty state to name. */
+  company: string | null;
+  result: ArchiveFetch | null;
+  error: string | null;
 }
 
 interface TicketsContextType {
@@ -66,7 +97,19 @@ interface TicketsContextType {
 
   navigationState: NavigationState;
   setActiveTab: (tab: string) => void;
-  setScrollPosition: (tab: 'my' | 'new' | 'all', position: number) => void;
+  setScrollPosition: (tab: BoardTab, position: number) => void;
+
+  archiveState: ArchiveState;
+  /**
+   * Pulls a customer's whole ticket history into the archive. Expensive by
+   * nature of the endpoint, so it is only ever called from a button.
+   */
+  loadCompanyArchive: (company: Customer) => Promise<void>;
+  /**
+   * True while a ticket number typed into the search box is being looked up
+   * against the backend because the store had no such ticket.
+   */
+  isLookingUpNumber: boolean;
 }
 
 const TicketsContext = createContext<TicketsContextType | undefined>(undefined);
@@ -78,11 +121,22 @@ const defaultFilterState: FilterState = {
 
 const defaultNavigationState: NavigationState = {
   activeTab: 'my',
-  scrollPositions: { my: 0, new: 0, all: 0 },
+  scrollPositions: { my: 0, new: 0, all: 0, archive: 0 },
 };
 
-const emptyBuckets: TicketBuckets = { new_tickets: [], my_tickets: [], all_tickets: [] };
-const emptyCounts: BucketCounts = { new: 0, mine: 0, all: 0 };
+const emptyBuckets: TicketBuckets = {
+  new_tickets: [],
+  my_tickets: [],
+  all_tickets: [],
+  archive_tickets: [],
+};
+const emptyCounts: BucketCounts = { new: 0, mine: 0, all: 0, archive: 0 };
+const idleArchive: ArchiveState = {
+  status: 'idle',
+  company: null,
+  result: null,
+  error: null,
+};
 
 function readStored<T>(key: string, fallback: T): T {
   try {
@@ -106,6 +160,8 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   const [counts, setCounts] = useState<BucketCounts>(emptyCounts);
   const [isLoading, setIsLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [archiveState, setArchiveState] = useState<ArchiveState>(idleArchive);
+  const [isLookingUpNumber, setIsLookingUpNumber] = useState(false);
 
   const [filterState, setFilterState] = useState<FilterState>(() =>
     readStored('ticketFilterState', defaultFilterState),
@@ -131,10 +187,12 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   const loadFromStore = useCallback(async () => {
     const token = ++queryToken.current;
     try {
-      const [newTickets, myTickets, allTickets, nextCounts] = await Promise.all([
+      const [newTickets, myTickets, allTickets, archiveTickets, nextCounts] = await Promise.all([
         queryTickets({ ...baseQuery, bucket: 'new' }),
         queryTickets({ ...baseQuery, bucket: 'mine' }),
         queryTickets({ ...baseQuery, bucket: 'all' }),
+        // No bucket: archived tickets have no bucket rows, by construction.
+        queryTickets({ ...baseQuery, archived: true }),
         getTicketCounts(),
       ]);
 
@@ -144,6 +202,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
         new_tickets: newTickets,
         my_tickets: myTickets,
         all_tickets: allTickets,
+        archive_tickets: archiveTickets,
       });
       setCounts(nextCounts);
     } catch (error) {
@@ -157,6 +216,79 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void loadFromStore();
   }, [loadFromStore]);
+
+  /**
+   * Resolves a ticket number the store does not know.
+   *
+   * The case this exists for: someone pastes the number of a ticket that was
+   * closed last month. It is not in the store, it cannot ever get there through
+   * syncing, and the board would otherwise just say "no results" — which is
+   * indistinguishable from the ticket not existing.
+   *
+   * Numbers already tried are remembered so a miss is not retried on every
+   * keystroke, and so a genuinely unknown number costs exactly one request.
+   */
+  const attemptedNumbers = useRef(new Set<number>());
+
+  useEffect(() => {
+    const wanted = baseQuery.id;
+    if (wanted === undefined || attemptedNumbers.current.has(wanted)) return;
+
+    // Only when nothing local matched; a ticket already on screen needs no
+    // request, and this must not fire while the first query is still running.
+    if (isLoading) return;
+    const found =
+      tickets.my_tickets.length +
+      tickets.new_tickets.length +
+      tickets.all_tickets.length +
+      tickets.archive_tickets.length;
+    if (found > 0) return;
+
+    let cancelled = false;
+    attemptedNumbers.current.add(wanted);
+    setIsLookingUpNumber(true);
+
+    void (async () => {
+      try {
+        const ticket = await fetchTicketByNumber(wanted);
+        if (!cancelled && ticket) await loadFromStore();
+      } catch (error) {
+        // A failed lookup leaves the empty state in place, which already says
+        // the right thing. Nothing here is worth interrupting a search over.
+        console.error(`Failed to look up ticket ${wanted}:`, error);
+      } finally {
+        if (!cancelled) setIsLookingUpNumber(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [baseQuery.id, isLoading, tickets, loadFromStore]);
+
+  const loadCompanyArchive = useCallback(
+    async (company: Customer) => {
+      setArchiveState({ status: 'loading', company: company.name, result: null, error: null });
+      try {
+        const result = await fetchCompanyArchive(company.id);
+        setArchiveState({
+          status: 'idle',
+          company: company.name,
+          result,
+          error: null,
+        });
+        await loadFromStore();
+      } catch (error) {
+        setArchiveState({
+          status: 'error',
+          company: company.name,
+          result: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    [loadFromStore],
+  );
 
   // Re-query when the sync engine reports the data changed. One subscription
   // per window, but only one engine doing the actual work.
@@ -237,7 +369,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setScrollPosition = useCallback(
-    (tab: 'my' | 'new' | 'all', position: number) => {
+    (tab: BoardTab, position: number) => {
       setNavigationState((prev) => {
         const next = {
           ...prev,
@@ -263,6 +395,9 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
       navigationState,
       setActiveTab,
       setScrollPosition,
+      archiveState,
+      loadCompanyArchive,
+      isLookingUpNumber,
     }),
     [
       tickets,
@@ -276,6 +411,9 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
       navigationState,
       setActiveTab,
       setScrollPosition,
+      archiveState,
+      loadCompanyArchive,
+      isLookingUpNumber,
     ],
   );
 

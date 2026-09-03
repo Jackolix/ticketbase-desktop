@@ -39,6 +39,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { RelatedTickets } from './RelatedTickets';
+import { useHotkey } from '@/hooks/useHotkey';
 import { Textarea } from '@/components/ui/textarea';
 import { FilePreviewModal } from '@/components/ui/FilePreviewModal';
 import { useAuth } from '@/contexts/AuthContext';
@@ -60,6 +62,12 @@ interface TicketDetailProps {
   ticket: Ticket;
   onBack: () => void;
   /**
+   * Opens another ticket — a related one, from the Verwandt tab. Without it
+   * those rows are still shown but are not clickable, which is the right
+   * behaviour anywhere navigation is not possible.
+   */
+  onSelectTicket?: (ticket: Ticket) => void;
+  /**
    * `embedded` renders inside the main window: a back arrow, and a button to
    * pop the ticket out. `window` renders as its own window: a close button, and
    * no pop-out, since it already is one.
@@ -75,7 +83,12 @@ interface TicketDetailProps {
  * a technician needs to identify the ticket sits in a sidebar, and the tabs
  * hold only the things they act on: history, tasks and messages.
  */
-export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDetailProps) {
+export function TicketDetail({
+  ticket,
+  onBack,
+  onSelectTicket,
+  variant = 'embedded',
+}: TicketDetailProps) {
   const { user } = useAuth();
 
   const [history, setHistory] = useState<TicketHistory[]>([]);
@@ -95,6 +108,14 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
   const [isForwardOpen, setIsForwardOpen] = useState(false);
+  // Controlled so the customer name in the sidebar can switch to the
+  // related-tickets tab.
+  const [activeTab, setActiveTab] = useState('history');
+
+  // Escape leaves the ticket: back to the list when embedded, closing the
+  // window when this is one. Suppressed while a dialog is open, which has
+  // its own Escape, and while typing a work entry.
+  useHotkey('escape', onBack);
 
   const templateFields = parseTemplateData(ticket.template_data, {
     omitValues: [ticket.description],
@@ -440,7 +461,7 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
             </Card>
           )}
 
-          <Tabs defaultValue="history">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList>
               <TabsTrigger value="history" className="gap-1.5 text-xs">
                 <History className="h-3.5 w-3.5" /> Verlauf
@@ -464,6 +485,9 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
                   </span>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="related" className="gap-1.5 text-xs">
+                <History className="h-3.5 w-3.5" /> Verwandt
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="history" className="mt-3 space-y-3">
@@ -475,7 +499,14 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
                   <Textarea
                     value={entryText}
                     onChange={(e) => setEntryText(e.target.value)}
-                    placeholder="Was wurde gemacht?"
+                    // Enter alone belongs to the text; the modifier saves.
+                    onKeyDown={(e) => {
+                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                        e.preventDefault();
+                        if (!isSavingEntry && entryText.trim()) void handleSaveEntry();
+                      }
+                    }}
+                    placeholder="Was wurde gemacht? (Strg+⏎ speichert)"
                     rows={3}
                     className="text-sm"
                   />
@@ -685,6 +716,10 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
               )}
             </TabsContent>
 
+            <TabsContent value="related" className="mt-3">
+              <RelatedTickets ticket={ticket} onSelect={onSelectTicket} />
+            </TabsContent>
+
             <TabsContent value="messages" className="mt-3">
               <TicketMessages ticketId={ticket.id} />
             </TabsContent>
@@ -701,7 +736,16 @@ export function TicketDetail({ ticket, onBack, variant = 'embedded' }: TicketDet
               <h2 className="text-xs font-semibold uppercase tracking-wide">Kunde</h2>
             </div>
             <CardContent className="space-y-2 p-3">
-              <p className="text-sm font-medium">{ticket.company?.name || '—'}</p>
+              {/* Opens the customer's other tickets, which is the question a
+                  customer name most often raises. */}
+              <button
+                type="button"
+                onClick={() => setActiveTab('related')}
+                className="w-full rounded text-left text-sm font-medium underline-offset-2 hover:underline"
+                title="Weitere Tickets dieses Kunden"
+              >
+                {ticket.company?.name || '—'}
+              </button>
               {ticket.company?.number && (
                 <p className="font-mono text-[11px] text-muted-foreground">
                   {ticket.company.number}

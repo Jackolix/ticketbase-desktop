@@ -117,7 +117,15 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
       <Titlebar title={`Ticket #${ticket.id}`} />
       <div className="flex-1 overflow-auto p-4">
         <ErrorBoundary label={`ticket #${ticket.id}`} resetKey={ticket.id}>
-          <TicketDetail ticket={ticket} onBack={handleBack} variant="window" />
+          {/* A related ticket replaces this window's contents rather than
+              spawning another window, which is what a back button would
+              have to undo anyway. */}
+          <TicketDetail
+            ticket={ticket}
+            onBack={handleBack}
+            onSelectTicket={setTicket}
+            variant="window"
+          />
         </ErrorBoundary>
       </div>
     </div>
