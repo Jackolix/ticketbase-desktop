@@ -17,6 +17,14 @@ export interface EmlAttachment {
   contentType: string;
   /** Decoded size in bytes, where it could be determined. */
   size: number;
+  /**
+   * The decoded content.
+   *
+   * Null when the part used a transfer encoding this cannot decode, which is
+   * the difference between an attachment that can be opened and one that can
+   * only be listed.
+   */
+  bytes: Uint8Array | null;
 }
 
 export interface ParsedEmail {
@@ -59,11 +67,17 @@ export function parseEml(raw: string): ParsedEmail {
 
   const attachments: EmlAttachment[] = parts
     .filter(isAttachment)
-    .map((part) => ({
-      filename: attachmentName(part),
-      contentType: typeOf(part).split(';')[0].trim(),
-      size: estimateSize(part),
-    }))
+    .map((part) => {
+      const bytes = decodePartBytes(part);
+      return {
+        filename: attachmentName(part),
+        contentType: typeOf(part).split(';')[0].trim(),
+        // The decoded length is the real one; estimateSize only guesses from
+        // the encoded payload.
+        size: bytes ? bytes.length : estimateSize(part),
+        bytes,
+      };
+    })
     .filter((a) => a.filename.length > 0);
 
   return {
@@ -149,6 +163,30 @@ function estimateSize(part: MimePart): number {
   const payload = part.body.replace(/\s/g, '');
   // base64 carries 3 bytes per 4 characters.
   return encoding === 'base64' ? Math.floor((payload.length * 3) / 4) : part.body.length;
+}
+
+/**
+ * A part's raw bytes, whatever it holds.
+ *
+ * `decodeBody` exists to produce text and applies a charset; an image must not
+ * go through that — decoding JPEG bytes as UTF-8 destroys them. This stops at
+ * the transfer encoding, which is the only layer an attachment has.
+ */
+function decodePartBytes(part: MimePart): Uint8Array | null {
+  const encoding = (part.headers.get('content-transfer-encoding') ?? '7bit').toLowerCase();
+
+  if (encoding === 'base64') return base64ToBytes(part.body.replace(/\s/g, ''));
+  if (encoding === 'quoted-printable') return quotedPrintableToBytes(part.body);
+
+  // 7bit, 8bit and binary carry the content as-is. The body arrived as a
+  // JavaScript string, so each code unit is one byte of it.
+  if (encoding === '7bit' || encoding === '8bit' || encoding === 'binary') {
+    const bytes = new Uint8Array(part.body.length);
+    for (let i = 0; i < part.body.length; i += 1) bytes[i] = part.body.charCodeAt(i) & 0xff;
+    return bytes;
+  }
+
+  return null;
 }
 
 function decodeBody(part: MimePart): string {

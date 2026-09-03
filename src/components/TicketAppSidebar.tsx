@@ -13,11 +13,9 @@ import {
   Loader2,
   LogOut,
   Book,
-  Mail,
 } from "lucide-react"
 
 import { NavUser } from "@/components/nav-user"
-import { OpenEmlFile } from "@/components/tickets/OpenEmlFile"
 import {
   Sidebar,
   SidebarContent,
@@ -166,27 +164,6 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu className="space-y-0.5 group-data-[collapsible=icon]:items-center">
-              {/* Reading an .eml no longer requires having a ticket that
-                  happens to carry one as an attachment. */}
-              <SidebarMenuItem>
-                <OpenEmlFile
-                  render={(open) => (
-                    <SidebarMenuButton
-                      tooltip="E-Mail-Datei (.eml) öffnen"
-                      className="h-10 px-3"
-                      onClick={open}
-                    >
-                      <span className="flex w-full items-center gap-3 group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center">
-                        <Mail className="h-4 w-4 shrink-0" />
-                        <span className="font-medium group-data-[collapsible=icon]:sr-only">
-                          EML öffnen
-                        </span>
-                      </span>
-                    </SidebarMenuButton>
-                  )}
-                />
-              </SidebarMenuItem>
-
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild

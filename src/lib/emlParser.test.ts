@@ -160,3 +160,91 @@ describe('decodeHeader', () => {
     expect(decodeHeader(value)).toBe(value);
   });
 });
+
+describe('attachment contents', () => {
+  it('decodes a base64 attachment to its real bytes', () => {
+    // "%PDF-1.4\n%âãÏÓ\n" — the header of the fixture PDF.
+    const [attachment] = parseEml(MULTIPART).attachments;
+
+    expect(attachment.bytes).not.toBeNull();
+    expect([...attachment.bytes!.slice(0, 5)]).toEqual([0x25, 0x50, 0x44, 0x46, 0x2d]);
+    // The size is the decoded length, not a guess from the encoded payload.
+    expect(attachment.size).toBe(attachment.bytes!.length);
+  });
+
+  it('keeps binary bytes intact rather than decoding them as text', () => {
+    // 0xFF 0xD8 0xFF is a JPEG header and is not valid UTF-8; running it
+    // through a text decoder would replace it with U+FFFD and destroy the
+    // image. This is why attachments do not go through decodeBody.
+    const jpegHeader = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10));
+    const mail = parseEml(
+      [
+        'Content-Type: multipart/mixed; boundary="B"',
+        '',
+        '--B',
+        'Content-Type: text/plain',
+        '',
+        'Anbei das Bild.',
+        '',
+        '--B',
+        'Content-Type: image/jpeg; name="foto.jpg"',
+        'Content-Disposition: attachment; filename="foto.jpg"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        jpegHeader,
+        '',
+        '--B--',
+      ].join('\r\n'),
+    );
+
+    const [image] = mail.attachments;
+    expect(image.filename).toBe('foto.jpg');
+    expect(image.contentType).toBe('image/jpeg');
+    expect([...image.bytes!]).toEqual([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  });
+
+  it('decodes an inline image, which is how pasted screenshots arrive', () => {
+    const mail = parseEml(
+      [
+        'Content-Type: multipart/related; boundary="R"',
+        '',
+        '--R',
+        'Content-Type: text/html',
+        '',
+        '<p>Siehe Screenshot</p>',
+        '',
+        '--R',
+        'Content-Type: image/png; name="screenshot.png"',
+        'Content-Disposition: inline; filename="screenshot.png"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47)),
+        '',
+        '--R--',
+      ].join('\r\n'),
+    );
+
+    expect(mail.attachments).toHaveLength(1);
+    expect([...mail.attachments[0].bytes!]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  it('reports null bytes for an encoding it cannot decode', () => {
+    // Better a disabled row than a corrupt file handed to the viewer.
+    const mail = parseEml(
+      [
+        'Content-Type: multipart/mixed; boundary="B"',
+        '',
+        '--B',
+        'Content-Type: application/octet-stream; name="x.bin"',
+        'Content-Disposition: attachment; filename="x.bin"',
+        'Content-Transfer-Encoding: x-uuencode',
+        '',
+        'begin 644 x.bin',
+        '',
+        '--B--',
+      ].join('\r\n'),
+    );
+
+    expect(mail.attachments[0].bytes).toBeNull();
+  });
+});

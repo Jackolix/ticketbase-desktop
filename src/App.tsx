@@ -275,7 +275,20 @@ function AppContent() {
       <SidebarInset className="min-h-0 overflow-hidden">
         {/* min-h-0 plus overflow-y-auto is what actually lets long pages scroll:
             without it the flex child grows past the viewport and is clipped. */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {/* The ticket board scrolls its own list — it has a sticky table
+            header and remembers an offset per tab, neither of which works if
+            an outer container is the thing actually scrolling. Everywhere
+            else, this is the scroller. */}
+        <div
+          className={`min-h-0 flex-1 p-4 ${
+            currentView === 'tickets' && !selectedTicket
+              ? // `flex flex-col` is load-bearing: without it this is a block
+                // container, the board's own `flex-1` means nothing, and it
+                // grows to fit every row instead of scrolling inside itself.
+                'flex flex-col overflow-hidden'
+              : 'overflow-y-auto'
+          }`}
+        >
           <ErrorBoundary
             label={selectedTicket ? `ticket #${selectedTicket.id}` : getBreadcrumbTitle().toLowerCase()}
             resetKey={selectedTicket ? `ticket-${selectedTicket.id}` : currentView}

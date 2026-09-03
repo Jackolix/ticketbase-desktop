@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { apiClient } from '@/lib/api';
-import { parseEml, type ParsedEmail } from '@/lib/emlParser';
+import { parseEml, type EmlAttachment, type ParsedEmail } from '@/lib/emlParser';
 import { normalizeTicketText, splitQuotedReply } from '@/lib/richText';
 import { WindowManager } from '@/lib/windowManager';
 
@@ -126,6 +126,10 @@ export function FilePreviewModal({
   const [zoom, setZoom] = useState(100);
   const [rotation, setRotation] = useState(0);
   const [showQuoted, setShowQuoted] = useState(false);
+  /** An attachment of the opened email, shown in a preview stacked on this one. */
+  const [innerAttachment, setInnerAttachment] = useState<{ name: string; blob: Blob } | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!isOpen || !info.previewable) return;
@@ -139,6 +143,7 @@ export function FilePreviewModal({
       setZoom(100);
       setRotation(0);
       setShowQuoted(false);
+      setInnerAttachment(null);
 
       try {
         // A local file is already in hand; an attachment has to be fetched.
@@ -285,7 +290,20 @@ export function FilePreviewModal({
               </Button>
             </Centered>
           ) : email ? (
-            <EmailView email={email} showQuoted={showQuoted} onToggleQuoted={setShowQuoted} />
+            <EmailView
+              email={email}
+              showQuoted={showQuoted}
+              onToggleQuoted={setShowQuoted}
+              onOpenAttachment={(attachment) => {
+                if (!attachment.bytes) return;
+                setInnerAttachment({
+                  name: attachment.filename,
+                  // A fresh copy: the Blob outlives the parsed email, and the
+                  // underlying buffer should not be shared with it.
+                  blob: new Blob([attachment.bytes.slice()], { type: attachment.contentType }),
+                });
+              }}
+            />
           ) : textContent !== null ? (
             <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed">
               {textContent}
@@ -317,6 +335,18 @@ export function FilePreviewModal({
           )}
         </div>
       </DialogContent>
+
+      {/* An attachment inside the email opens in its own preview on top of
+          this one, so closing it returns to the message rather than to the
+          ticket. */}
+      {innerAttachment && (
+        <FilePreviewModal
+          isOpen
+          onClose={() => setInnerAttachment(null)}
+          filename={innerAttachment.name}
+          file={innerAttachment.blob}
+        />
+      )}
     </Dialog>
   );
 }
@@ -326,8 +356,10 @@ function EmailView({
   email,
   showQuoted,
   onToggleQuoted,
+  onOpenAttachment,
 }: {
   email: ParsedEmail;
+  onOpenAttachment: (attachment: EmlAttachment) => void;
   showQuoted: boolean;
   onToggleQuoted: (open: boolean) => void;
 }) {
@@ -381,25 +413,31 @@ function EmailView({
             {email.attachments.length} {email.attachments.length === 1 ? 'Anhang' : 'Anhänge'}
           </p>
           <ul className="space-y-1">
-            {email.attachments.map((attachment) => (
-              <li
-                key={attachment.filename}
-                className="flex items-center gap-2 rounded border px-2 py-1.5 text-xs"
-              >
-                <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{attachment.filename}</span>
-                <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-                  {formatBytes(attachment.size)}
-                </span>
-              </li>
-            ))}
+            {email.attachments.map((attachment) => {
+              const canOpen = attachment.bytes !== null;
+              return (
+                <li key={attachment.filename}>
+                  <button
+                    type="button"
+                    disabled={!canOpen}
+                    onClick={() => onOpenAttachment(attachment)}
+                    title={
+                      canOpen
+                        ? `${attachment.filename} öffnen`
+                        : 'Diese Kodierung kann nicht gelesen werden'
+                    }
+                    className="flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left text-xs transition-colors enabled:hover:bg-accent disabled:cursor-default disabled:opacity-60"
+                  >
+                    <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">{attachment.filename}</span>
+                    <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                      {formatBytes(attachment.size)}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
-          {/* Extracting these would mean decoding arbitrary binaries out of the
-              MIME tree; opening the .eml externally is the honest route until
-              that is worth building. */}
-          <p className="text-[10px] text-muted-foreground">
-            Zum Öffnen der Anhänge die E-Mail extern öffnen.
-          </p>
         </div>
       )}
     </div>
