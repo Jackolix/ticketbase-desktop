@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Bell,
+  ArrowUpCircle,
   CheckCircle,
   Info,
   Loader2,
@@ -44,7 +45,14 @@ interface MailSettings {
 
 export function Settings() {
   const { user } = useAuth();
-  const { currentVersion, isCheckingForUpdate, checkForUpdate, lastError, lastCheckTime } =
+  const {
+    currentVersion,
+    availableUpdate,
+    isCheckingForUpdate,
+    checkForUpdate,
+    lastError,
+    lastCheckTime,
+  } =
     useUpdater();
   const { settings, updateSettings, requestNotificationPermission } = useNotifications();
 
@@ -389,10 +397,20 @@ export function Settings() {
                 )}
                 Auf Updates prüfen
               </Button>
+              {/* "Aktuell" has to account for the check having *found*
+                  something: it used to say so regardless, contradicting the
+                  update panel sitting next to it. */}
               {!isCheckingForUpdate && !lastError && lastCheckTime && (
-                <span className="flex items-center gap-1 text-xs text-tone-success">
-                  <CheckCircle className="h-3.5 w-3.5" /> Aktuell
-                </span>
+                availableUpdate ? (
+                  <span className="flex items-center gap-1 text-xs text-tone-info">
+                    <ArrowUpCircle className="h-3.5 w-3.5" />
+                    Version {availableUpdate.version} verfügbar
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-xs text-tone-success">
+                    <CheckCircle className="h-3.5 w-3.5" /> Aktuell
+                  </span>
+                )
               )}
             </div>
           </Section>

@@ -359,6 +359,76 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   sync_set_interval: () => null,
   open_ticket_window: () => null,
   show_ticket: () => null,
+
+  /**
+   * The updater, behind `?preview=1&update=1`.
+   *
+   * Off by default: the update panel covers the bottom-right corner, and every
+   * other preview would be taken hostage by it. The release body is a real
+   * GitHub one, Markdown and trailing "Full Changelog" line included, because
+   * rendering that is the part worth looking at.
+   */
+  'plugin:updater|check': () =>
+    new URLSearchParams(window.location.search).has('update')
+      ? {
+          rid: 1,
+          currentVersion: '1.0.0',
+          version: '1.1.0',
+          date: '2026-09-03 10:00:00.000 +00:00:00',
+          body: [
+            '## Neu',
+            '',
+            '- Archiv für abgeschlossene Tickets, per Nummer oder pro Kunde',
+            '- Kundenvorschläge in der Suche, auch nach Kundennummer',
+            '- Schriftgröße der Liste: Kompakt, Standard, Groß',
+            '- Vorschau beim Überfahren einer Zeile, Aktionen per Rechtsklick',
+            '',
+            '## Behoben',
+            '',
+            '- Die **Zeiterfassung** beginnt nicht mehr bei 0, siehe `sync.ts`',
+            '- Scrollposition der Liste bleibt erhalten',
+            '',
+            '---',
+            '**Full Changelog**: https://github.com/Jackolix/ticketbase-desktop/compare/v1.0.0...v1.1.0',
+          ].join('\n'),
+          rawJson: {},
+        }
+      : null,
+  'plugin:app|version': () => '1.0.0',
+  'plugin:updater|download': (args: any) => {
+    // Drive a real download over the Channel, so the progress bar, the
+    // "ready" state and the install button can all be seen. Without these
+    // events the panel would sit at 0% forever.
+    const emit = (window as any).__TAURI_INTERNALS__.runCallback;
+    const channelId = args?.onEvent?.id;
+    const total = 12_000_000;
+    let index = 0;
+
+    if (channelId !== undefined) {
+      emit(channelId, { index: index++, message: { event: 'Started', data: { contentLength: total } } });
+
+      let sent = 0;
+      const tick = setInterval(() => {
+        const chunk = Math.round(total / 12);
+        sent += chunk;
+        if (sent >= total) {
+          clearInterval(tick);
+          emit(channelId, {
+            index: index++,
+            message: { event: 'Progress', data: { chunkLength: total - (sent - chunk) } },
+          });
+          emit(channelId, { index: index++, message: { event: 'Finished' } });
+          return;
+        }
+        emit(channelId, { index: index++, message: { event: 'Progress', data: { chunkLength: chunk } } });
+      }, 220);
+    }
+
+    return 2;
+  },
+  'plugin:updater|install': () => null,
+  'plugin:updater|download_and_install': () => null,
+  'plugin:resources|close': () => null,
 };
 
 /**
@@ -577,11 +647,15 @@ async function handleCommand(cmd: string, args: any): Promise<unknown> {
     return null;
   }
 
-  // Window, notification and updater calls are inert in a browser.
-  if (cmd.startsWith('plugin:') || cmd.startsWith('core:')) return null;
-
+  // An explicit handler wins, including for plugin commands — that is how the
+  // updater panel gets something to show. This lookup has to come before the
+  // blanket rule below, which would otherwise swallow every `plugin:` command.
   const handler = HANDLERS[cmd];
   if (handler) return handler(args ?? {});
+
+  // Everything else from the window, notification and updater plugins is inert
+  // in a browser.
+  if (cmd.startsWith('plugin:') || cmd.startsWith('core:')) return null;
 
   console.warn('[preview] unhandled command:', cmd, args);
   return null;
