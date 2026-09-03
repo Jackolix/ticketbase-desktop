@@ -593,7 +593,9 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
               >
                 <th className="w-[3px] p-0" />
                 <th className="w-px whitespace-nowrap py-2 pl-3 pr-3 text-left font-medium">Nr.</th>
-                <th className="py-2 pr-3 text-left font-medium">Vorgang</th>
+                {/* The only column that gives: everything else is sized to its
+                    content, so this one absorbs whatever is left. */}
+                <th className="w-full py-2 pr-3 text-left font-medium">Vorgang</th>
                 <th className="hidden w-px whitespace-nowrap py-2 pr-3 text-left font-medium md:table-cell">
                   Kunde
                 </th>
@@ -849,8 +851,12 @@ const TicketRow = forwardRef<HTMLTableRowElement, TicketRowProps>(function Ticke
         {ticket.id}
       </td>
 
-      <td className={`pr-3 ${tokens.row}`}>
-        <div className="flex items-center gap-1.5">
+      {/* `max-w-0` with `w-full` is what makes truncation work in a table: a
+          cell is otherwise sized to its content, so a long summary widens the
+          whole table instead of being cut off — which is where the horizontal
+          scrollbar came from. */}
+      <td className={`w-full max-w-0 pr-3 ${tokens.row}`}>
+        <div className="flex min-w-0 items-center gap-1.5">
           <span className={`truncate font-medium ${tokens.title}`}>{ticket.summary || '—'}</span>
           {ticket.attachments.length > 0 && (
             <Paperclip className={`shrink-0 text-muted-foreground ${tokens.icon}`} />

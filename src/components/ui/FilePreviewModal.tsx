@@ -13,6 +13,7 @@ import {
   Plus,
   RotateCw,
   Video,
+  X,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -200,7 +201,14 @@ export function FilePreviewModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[85vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+      {/* The dialog's own close button is positioned absolutely at the top
+          right, which is exactly where this header's toolbar ends — it landed
+          on top of the download button. One close button, in the row with the
+          others. */}
+      <DialogContent
+        showCloseButton={false}
+        className="flex h-[85vh] max-w-5xl flex-col gap-0 overflow-hidden p-0"
+      >
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1">
@@ -242,6 +250,9 @@ export function FilePreviewModal({
               )}
             </IconButton>
           )}
+          <IconButton label="Schließen" onClick={onClose}>
+            <X className="h-3.5 w-3.5" />
+          </IconButton>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto bg-muted/30">

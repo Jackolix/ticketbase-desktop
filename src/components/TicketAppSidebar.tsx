@@ -133,11 +133,11 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
       <SidebarContent className="px-2">
         {/* Main Navigation */}
         <SidebarGroup>
-          <SidebarGroupLabel className="px-2 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          <SidebarGroupLabel className="px-2 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
             Navigation
           </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu className="space-y-1 group-data-[collapsible=icon]:items-center">
+            <SidebarMenu className="space-y-0.5 group-data-[collapsible=icon]:items-center">
               {navigationItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
@@ -157,15 +157,15 @@ export function TicketAppSidebar({ currentView, onViewChange, ...props }: Ticket
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <Separator className="my-4" />
+        <Separator className="my-2" />
 
         {/* Settings & Actions */}
         <SidebarGroup>
-          <SidebarGroupLabel className="px-2 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          <SidebarGroupLabel className="px-2 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
             Settings & Actions
           </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu className="space-y-1 group-data-[collapsible=icon]:items-center">
+            <SidebarMenu className="space-y-0.5 group-data-[collapsible=icon]:items-center">
               {/* Reading an .eml no longer requires having a ticket that
                   happens to carry one as an attachment. */}
               <SidebarMenuItem>
