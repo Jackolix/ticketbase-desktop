@@ -97,6 +97,37 @@ fn try_d_m_y(raw: &str) -> Option<(String, String)> {
     Some((format!("{year}-{month}-{day}"), time.to_string()))
 }
 
+/// Renders a timestamp in the backend's own display format, `d-m-Y H:i`.
+///
+/// `getTickets` formats its dates in PHP before sending them; the endpoints
+/// that hand back raw Eloquent models (`getTicketById`, `getCompanyById`) do
+/// not, so their timestamps arrive as ISO-8601. Without this, archived rows
+/// would render their dates in a visibly different format from every other row
+/// on the same board.
+///
+/// One honest caveat: Laravel serialises those raw models in UTC, while the
+/// formatted ones are already in the app's Europe/Berlin timezone. Converting
+/// between the two needs a timezone database, so the value is passed through as
+/// sent. For a ticket created within an hour or two of midnight the archived
+/// date can therefore read one day earlier than the ticket page shows.
+///
+/// Input that cannot be parsed is returned trimmed but otherwise untouched —
+/// showing the raw string beats showing nothing.
+pub fn to_display(raw: &str) -> String {
+    let sortable = to_sortable(raw);
+
+    match sortable.split_once('T') {
+        Some((date, time)) => {
+            let mut parts = date.split('-');
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some(year), Some(month), Some(day)) => format!("{day}-{month}-{year} {time}"),
+                _ => raw.trim().to_string(),
+            }
+        }
+        None => raw.trim().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +167,20 @@ mod tests {
         assert_eq!(to_sortable("2026-09-02T08:14:00Z"), "2026-09-02T08:14");
         assert_eq!(to_sortable("2026-09-02 08:14:00"), "2026-09-02T08:14");
         assert_eq!(to_sortable("2026-09-02"), "2026-09-02T00:00");
+    }
+
+    #[test]
+    fn renders_iso_timestamps_in_the_backend_display_format() {
+        // getCompanyById hands back raw Eloquent models; getTickets does not.
+        assert_eq!(to_display("2026-09-02T08:14:00Z"), "02-09-2026 08:14");
+        assert_eq!(to_display("2024-01-23 11:59:18.980"), "23-01-2024 11:59");
+    }
+
+    #[test]
+    fn leaves_unparseable_timestamps_visible() {
+        // Better a raw string on screen than a blank date column.
+        assert_eq!(to_display("  not a date  "), "not a date");
+        assert_eq!(to_display(""), "");
     }
 
     #[test]

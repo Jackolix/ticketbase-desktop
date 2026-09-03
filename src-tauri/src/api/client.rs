@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use super::models::{Ticket, TicketsResponse};
+use super::models::{Company, Customer, CustomersResponse, Ticket, TicketsResponse};
 
 pub const DEFAULT_BASE_URL: &str = "https://itm.ticketbase.net/api";
 
@@ -181,6 +181,174 @@ impl ApiClient {
         parse_ticket_by_id(&raw)
             .ok_or_else(|| ApiError::Parse(format!("could not read ticket {ticket_id}")))
     }
+
+    /// The full customer list.
+    ///
+    /// Small enough to cache whole and refresh rarely, which is what makes
+    /// company suggestions instant instead of a request per keystroke.
+    pub async fn get_customers(&self, token: &str) -> Result<Vec<Customer>, ApiError> {
+        let response: CustomersResponse = self
+            .post_json(token, "/getCustomers", serde_json::json!({}))
+            .await?;
+        Ok(response.into_customers())
+    }
+
+    /// Every ticket belonging to one company, closed ones included.
+    ///
+    /// This is the only bulk route to closed tickets that exists. `getTickets`
+    /// filters `status_id != 4`, and `getClosedConfirmedTickets` returns only
+    /// the caller's own unrated ones, so neither can answer "show me what we
+    /// did for this customer last year".
+    ///
+    /// The cost is real: `getCompanyById` eager-loads `tickets` and then four
+    /// further relations declared identically to it, so the same rows come back
+    /// five times over. That is a property of the backend, which is why this is
+    /// an explicit on-demand action and never part of the poll loop.
+    pub async fn get_company_tickets(
+        &self,
+        token: &str,
+        company_id: i64,
+    ) -> Result<Vec<Ticket>, ApiError> {
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            company: Option<serde_json::Value>,
+        }
+
+        let envelope: Envelope = self
+            .get_json(token, &format!("/getCompanyById?company_id={company_id}"))
+            .await?;
+
+        let raw = envelope
+            .company
+            .ok_or_else(|| ApiError::Parse(format!("company {company_id} not found")))?;
+
+        let company = company_from_raw(&raw);
+
+        let rows = match raw.get("tickets") {
+            Some(serde_json::Value::Array(rows)) => rows.as_slice(),
+            // A customer with no tickets is a valid answer, not a failure.
+            _ => &[][..],
+        };
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| parse_company_ticket(row, &company))
+            .collect())
+    }
+}
+
+/// Reads a string at `path`, coercing numbers and treating anything else as "".
+fn raw_str(raw: &serde_json::Value, path: &[&str]) -> String {
+    let mut node = raw;
+    for key in path {
+        match node.get(key) {
+            Some(next) => node = next,
+            None => return String::new(),
+        }
+    }
+    match node {
+        serde_json::Value::String(v) => v.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn raw_i64(raw: &serde_json::Value, key: &str) -> i64 {
+    match raw.get(key) {
+        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0),
+        Some(serde_json::Value::String(v)) => v.trim().parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Builds a `Company` from a raw `companies` table row.
+///
+/// The column names differ from the keys `getTicketDataa` emits — `email` not
+/// `companyMail`, `address` not `companyAdress` — because this is the row
+/// itself rather than the controller's hand-built array.
+fn company_from_raw(raw: &serde_json::Value) -> Company {
+    let locations = match raw.get("locations") {
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .map(|item| super::models::CompanyLocation {
+                id: raw_i64(item, "id"),
+                name: raw_str(item, &["name"]),
+            })
+            .filter(|l| l.id > 0)
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    Company {
+        id: raw_i64(raw, "id"),
+        name: raw_str(raw, &["name"]),
+        number: raw_str(raw, &["number"]),
+        company_mail: raw_str(raw, &["email"]),
+        company_phone: raw_str(raw, &["phone"]),
+        company_zip: raw_str(raw, &["zip"]),
+        company_address: raw_str(raw, &["address"]),
+        locations,
+    }
+}
+
+/// Flattens one raw ticket row from `getCompanyById` into a `Ticket`.
+///
+/// That relation is loaded without any nested relations of its own, so several
+/// fields simply are not on the wire:
+///
+///   * `status` — resolved from `status_id` against the statuses table.
+///   * `subject` — only `service_detail_id` is present, and the names live in
+///     a table this endpoint never joins.
+///   * `ticketUser`, `ticketCreator`, `pool_name`, `ticket_start` — same.
+///
+/// The company comes from the parent object, so archived rows still carry a
+/// customer name in the list. `created_at` is a real SQL timestamp here rather
+/// than the `d-m-Y H:i` string `getTickets` formats, so it is normalised to
+/// match; otherwise archived rows would render their dates in a different
+/// format from every other row on the board.
+fn parse_company_ticket(raw: &serde_json::Value, company: &Company) -> Option<Ticket> {
+    use super::models::{parse_attachments, status_name};
+
+    let id = raw_i64(raw, "id");
+    if id == 0 {
+        return None;
+    }
+
+    let status_id = raw_i64(raw, "status_id");
+
+    Some(Ticket {
+        id,
+        description: raw_str(raw, &["description"]),
+        status: status_name(status_id).unwrap_or_default().to_string(),
+        status_id,
+        summary: raw_str(raw, &["summary"]),
+        priority: raw_str(raw, &["priority"]),
+        index: raw_i64(raw, "priority_index"),
+        my_ticket_id: raw_i64(raw, "my_ticket_id"),
+        location_id: raw_i64(raw, "location_id"),
+        dyn_template_id: raw_i64(raw, "dyn_template_id"),
+
+        // Not joined by this endpoint.
+        subject: String::new(),
+        ticket_creator: String::new(),
+        ticket_user: String::new(),
+        ticket_user_phone: String::new(),
+        ticket_terminated_user: String::new(),
+        pool_name: String::new(),
+        ticket_start: String::new(),
+        ticket_messages_count: 0,
+        play_status: None,
+
+        attachments: raw
+            .get("attachments")
+            .map(parse_attachments)
+            .unwrap_or_default(),
+
+        company: company.clone(),
+
+        created_at: crate::datetime::to_display(&raw_str(raw, &["created_at"])),
+        template_data: raw_str(raw, &["template_data"]),
+    })
 }
 
 /// The subset of the logged-in user that `getTickets` needs.
@@ -203,46 +371,22 @@ pub struct TicketQueryUser {
 pub fn parse_ticket_by_id(raw: &serde_json::Value) -> Option<Ticket> {
     use super::models::parse_attachments;
 
-    // Small helpers kept local: this shape is unique to one endpoint.
-    fn get_str(raw: &serde_json::Value, path: &[&str]) -> String {
-        let mut node = raw;
-        for key in path {
-            match node.get(key) {
-                Some(next) => node = next,
-                None => return String::new(),
-            }
-        }
-        match node {
-            serde_json::Value::String(v) => v.clone(),
-            serde_json::Value::Number(n) => n.to_string(),
-            _ => String::new(),
-        }
-    }
-
-    fn get_i64(raw: &serde_json::Value, key: &str) -> i64 {
-        match raw.get(key) {
-            Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0),
-            Some(serde_json::Value::String(v)) => v.trim().parse().unwrap_or(0),
-            _ => 0,
-        }
-    }
-
-    let id = get_i64(raw, "id");
+    let id = raw_i64(raw, "id");
     if id == 0 {
         return None;
     }
 
     Some(Ticket {
         id,
-        description: get_str(raw, &["description"]),
-        status: get_str(raw, &["status", "name"]),
-        status_id: get_i64(raw, "status_id"),
-        summary: get_str(raw, &["summary"]),
-        subject: get_str(raw, &["servicedetail", "name"]),
-        priority: get_str(raw, &["priority"]),
-        ticket_creator: get_str(raw, &["userone", "name"]),
-        ticket_user: get_str(raw, &["ticketuser", "name"]),
-        ticket_user_phone: get_str(raw, &["ticketuser", "phone"]),
+        description: raw_str(raw, &["description"]),
+        status: raw_str(raw, &["status", "name"]),
+        status_id: raw_i64(raw, "status_id"),
+        summary: raw_str(raw, &["summary"]),
+        subject: raw_str(raw, &["servicedetail", "name"]),
+        priority: raw_str(raw, &["priority"]),
+        ticket_creator: raw_str(raw, &["userone", "name"]),
+        ticket_user: raw_str(raw, &["ticketuser", "name"]),
+        ticket_user_phone: raw_str(raw, &["ticketuser", "phone"]),
 
         // Not loaded by getTicketById — the store is the source for these.
         ticket_terminated_user: String::new(),
@@ -259,27 +403,27 @@ pub fn parse_ticket_by_id(raw: &serde_json::Value) -> Option<Ticket> {
             .map(parse_attachments)
             .unwrap_or_default(),
 
-        index: get_i64(raw, "priority_index"),
-        my_ticket_id: get_i64(raw, "my_ticket_id"),
-        location_id: get_i64(raw, "location_id"),
-        dyn_template_id: get_i64(raw, "dyn_template_id"),
+        index: raw_i64(raw, "priority_index"),
+        my_ticket_id: raw_i64(raw, "my_ticket_id"),
+        location_id: raw_i64(raw, "location_id"),
+        dyn_template_id: raw_i64(raw, "dyn_template_id"),
 
         company: super::models::Company {
             id: raw
                 .get("companyone")
-                .map(|c| get_i64(c, "id"))
+                .map(|c| raw_i64(c, "id"))
                 .unwrap_or(0),
-            name: get_str(raw, &["companyone", "name"]),
-            number: get_str(raw, &["companyone", "number"]),
-            company_mail: get_str(raw, &["companyone", "email"]),
-            company_phone: get_str(raw, &["companyone", "phone"]),
-            company_zip: get_str(raw, &["companyone", "zip"]),
-            company_address: get_str(raw, &["companyone", "address"]),
+            name: raw_str(raw, &["companyone", "name"]),
+            number: raw_str(raw, &["companyone", "number"]),
+            company_mail: raw_str(raw, &["companyone", "email"]),
+            company_phone: raw_str(raw, &["companyone", "phone"]),
+            company_zip: raw_str(raw, &["companyone", "zip"]),
+            company_address: raw_str(raw, &["companyone", "address"]),
             locations: Vec::new(),
         },
 
-        created_at: get_str(raw, &["created_at"]),
-        template_data: get_str(raw, &["template_data"]),
+        created_at: raw_str(raw, &["created_at"]),
+        template_data: raw_str(raw, &["template_data"]),
     })
 }
 

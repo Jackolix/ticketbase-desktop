@@ -26,6 +26,15 @@ pub const EVENT_CHANGED: &str = "sync://changed";
 
 /// Meta key holding the unix-millis timestamp of the last successful sync.
 const META_LAST_SYNCED_AT: &str = "last_synced_at";
+/// Meta key for the last customer-list refresh.
+const META_CUSTOMERS_SYNCED_AT: &str = "customers_synced_at";
+
+/// How long the cached customer list is considered current.
+///
+/// Companies are created rarely and the list is only used to suggest names, so
+/// refetching it on every poll would be pure waste. A stale entry costs at most
+/// one missing suggestion until the next refresh.
+const CUSTOMERS_MAX_AGE_MS: i64 = 6 * 60 * 60 * 1000;
 
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(30);
@@ -235,6 +244,8 @@ impl SyncEngine {
             s.counts = Some(counts.clone());
         });
 
+        self.refresh_customers_if_stale(&session.token, synced_at).await;
+
         // One event for every window. Notification change-detection consumes
         // this, so a ticket is announced once no matter how many windows exist.
         let _ = app.emit(
@@ -247,6 +258,40 @@ impl SyncEngine {
         );
 
         Ok(diff)
+    }
+
+    /// Refreshes the cached customer list when it has aged out.
+    ///
+    /// Deliberately infallible: company suggestions are a convenience, and a
+    /// failure here must not turn an otherwise successful ticket sync into a
+    /// failed one.
+    async fn refresh_customers_if_stale(&self, token: &str, now: i64) {
+        let last = self
+            .store
+            .get_meta(META_CUSTOMERS_SYNCED_AT)
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok());
+
+        if matches!(last, Some(at) if now - at < CUSTOMERS_MAX_AGE_MS) {
+            return;
+        }
+
+        match self.client.get_customers(token).await {
+            Ok(customers) if !customers.is_empty() => {
+                if let Err(err) = self.store.replace_customers(&customers, now) {
+                    log::warn!("could not cache the customer list: {err}");
+                    return;
+                }
+                let _ = self
+                    .store
+                    .set_meta(META_CUSTOMERS_SYNCED_AT, &now.to_string());
+            }
+            // An empty list is more likely a backend hiccup than a company-less
+            // installation, so the previous cache is kept and retried later.
+            Ok(_) => log::warn!("getCustomers returned no customers; keeping the cached list"),
+            Err(err) => log::warn!("could not refresh the customer list: {err}"),
+        }
     }
 
     /// Runs the sync loop until the app exits.

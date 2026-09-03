@@ -6,13 +6,19 @@
 //!
 //! Bucket membership (new / mine / all) is decided server-side and a ticket can
 //! be in more than one, so it lives in its own table rather than as a column.
+//!
+//! Closed tickets are a separate matter. `getTicketsQuery` filters them out
+//! with `status_id != 4`, so no amount of syncing will ever bring one in. They
+//! are fetched on demand instead and marked `archived`, which is what exempts
+//! them from the purge that drops anything missing from the latest pull.
 
 use std::path::Path;
 use std::sync::Mutex;
 
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::api::models::{Bucket, Company, Ticket};
+use crate::api::models::{Bucket, Company, Customer, Ticket};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -79,7 +85,8 @@ impl Store {
                 ticket_start          TEXT NOT NULL DEFAULT '',
                 ticket_messages_count INTEGER NOT NULL DEFAULT 0,
                 template_data         TEXT NOT NULL DEFAULT '',
-                synced_at             INTEGER NOT NULL DEFAULT 0
+                synced_at             INTEGER NOT NULL DEFAULT 0,
+                archived              INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS ticket_buckets (
@@ -98,7 +105,28 @@ impl Store {
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS companies (
+                id        INTEGER PRIMARY KEY,
+                name      TEXT NOT NULL DEFAULT '',
+                number    TEXT NOT NULL DEFAULT '',
+                zip       TEXT NOT NULL DEFAULT '',
+                location  TEXT NOT NULL DEFAULT '',
+                passive   INTEGER NOT NULL DEFAULT 0,
+                synced_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name COLLATE NOCASE);
             "#,
+        )?;
+
+        register_unicode_lower(conn)?;
+
+        // Databases written before archiving existed have no such column, and
+        // an install that upgrades in place must not lose its cache over it.
+        add_column_if_missing(conn, "tickets", "archived", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_tickets_archived ON tickets(archived);",
         )?;
 
         Ok(())
@@ -133,7 +161,10 @@ impl Store {
             (Bucket::All, all_tickets),
         ] {
             for ticket in tickets {
-                upsert_ticket(&tx, ticket, synced_at)?;
+                // A ticket present in the live pull is open by definition, so
+                // this also un-archives one that was reopened after we cached
+                // it from the archive.
+                upsert_ticket(&tx, ticket, synced_at, false)?;
                 tx.execute(
                     "INSERT OR IGNORE INTO ticket_buckets (ticket_id, bucket) VALUES (?1, ?2)",
                     params![ticket.id, bucket.as_str()],
@@ -141,9 +172,12 @@ impl Store {
             }
         }
 
-        // Anything not in this pull is closed or no longer visible.
+        // Anything not in this pull is closed or no longer visible. Archived
+        // rows are exempt: they were fetched deliberately and were never
+        // expected to appear here.
         tx.execute(
-            "DELETE FROM tickets WHERE id NOT IN (SELECT ticket_id FROM ticket_buckets)",
+            "DELETE FROM tickets \
+             WHERE archived = 0 AND id NOT IN (SELECT ticket_id FROM ticket_buckets)",
             [],
         )?;
 
@@ -184,9 +218,122 @@ impl Store {
     ///
     /// Used by the `getTicketById` fallback so a ticket fetched individually is
     /// still cached, but does not pretend to know which bucket it belongs to.
-    pub fn put_ticket(&self, ticket: &Ticket, synced_at: i64) -> Result<(), StoreError> {
+    ///
+    /// Such a ticket has no bucket rows, so it would be purged by the next sync
+    /// unless it is marked archived — which is exactly right for a closed one
+    /// and merely means an open one is refreshed from the pull instead.
+    pub fn put_ticket(
+        &self,
+        ticket: &Ticket,
+        synced_at: i64,
+        archived: bool,
+    ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        upsert_ticket(&conn, ticket, synced_at)
+        upsert_ticket(&conn, ticket, synced_at, archived)
+    }
+
+    /// Caches a batch of archived tickets in one transaction.
+    ///
+    /// Tickets already known from the live sync are left alone: their rows come
+    /// from `getTickets`, which loads relations `getCompanyById` does not, so
+    /// overwriting them would blank out the subject, pool and message count of
+    /// every open ticket the customer happens to have.
+    pub fn put_archived(&self, tickets: &[Ticket], synced_at: i64) -> Result<usize, StoreError> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+
+        let mut written = 0;
+        for ticket in tickets {
+            let is_live: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ticket_buckets WHERE ticket_id = ?1)",
+                params![ticket.id],
+                |r| r.get(0),
+            )?;
+            if is_live {
+                continue;
+            }
+
+            upsert_ticket(&tx, ticket, synced_at, true)?;
+            written += 1;
+        }
+
+        tx.commit()?;
+        Ok(written)
+    }
+
+    /// Replaces the cached customer list.
+    pub fn replace_customers(
+        &self,
+        customers: &[Customer],
+        synced_at: i64,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+
+        tx.execute("DELETE FROM companies", [])?;
+        for customer in customers {
+            tx.execute(
+                "INSERT OR REPLACE INTO companies \
+                 (id, name, number, zip, location, passive, synced_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    customer.id,
+                    customer.name,
+                    customer.number,
+                    customer.zip,
+                    customer.location,
+                    customer.passive,
+                    synced_at,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Customers matching a partial name or customer number.
+    ///
+    /// Ranked so that typing the beginning of a name puts it at the top, which
+    /// is the whole point: nobody remembers whether the record reads "Müller
+    /// GmbH", "Mueller GmbH & Co. KG" or "Müller Logistik".
+    ///
+    /// An empty query returns the first `limit` customers alphabetically, so
+    /// typing `firma:` alone still offers something to pick from.
+    pub fn search_customers(&self, query: &str, limit: i64) -> Result<Vec<Customer>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let needle = query.trim().to_lowercase();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, name, number, zip, location, passive FROM companies \
+             WHERE ?1 = '' OR ulower(name) LIKE ?2 OR ulower(number) LIKE ?2 \
+             ORDER BY \
+               CASE WHEN ?1 = '' THEN 0 \
+                    WHEN ulower(name) = ?1 THEN 0 \
+                    WHEN ulower(name) LIKE ?3 THEN 1 \
+                    WHEN ulower(number) = ?1 THEN 1 \
+                    ELSE 2 END ASC, \
+               passive ASC, \
+               CASE WHEN ?1 = '' THEN 0 ELSE length(name) END ASC, \
+               name COLLATE NOCASE ASC \
+             LIMIT ?4",
+        )?;
+
+        let rows = stmt.query_map(
+            params![needle, format!("%{needle}%"), format!("{needle}%"), limit],
+            |row| {
+                Ok(Customer {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    number: row.get(2)?,
+                    zip: row.get(3)?,
+                    location: row.get(4)?,
+                    passive: row.get(5)?,
+                })
+            },
+        )?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Queries the local store. This replaces client-side filtering over a
@@ -205,12 +352,19 @@ impl Store {
             args.push(Box::new(bucket.as_str().to_string()));
         }
 
+        // Archived rows have no bucket, so a bucket query already excludes
+        // them; this is what lets the archive be asked for on its own.
+        if let Some(archived) = q.archived {
+            clauses.push("t.archived = ?".into());
+            args.push(Box::new(i64::from(archived)));
+        }
+
         if let Some(search) = q.search.as_ref().filter(|s| !s.trim().is_empty()) {
             let like = format!("%{}%", search.trim().to_lowercase());
             clauses.push(
-                "(lower(t.summary) LIKE ? OR lower(t.description) LIKE ? \
-                  OR lower(t.company_name) LIKE ? OR CAST(t.id AS TEXT) LIKE ? \
-                  OR lower(t.template_data) LIKE ?)"
+                "(ulower(t.summary) LIKE ? OR ulower(t.description) LIKE ? \
+                  OR ulower(t.company_name) LIKE ? OR CAST(t.id AS TEXT) LIKE ? \
+                  OR ulower(t.template_data) LIKE ?)"
                     .into(),
             );
             for _ in 0..5 {
@@ -229,19 +383,19 @@ impl Store {
         }
 
         if let Some(name) = q.company_name.as_ref().filter(|s| !s.trim().is_empty()) {
-            clauses.push("lower(t.company_name) LIKE ?".into());
+            clauses.push("ulower(t.company_name) LIKE ?".into());
             args.push(Box::new(format!("%{}%", name.trim().to_lowercase())));
         }
 
         if let Some(status) = q.status.as_ref().filter(|s| !s.is_empty()) {
             // Prefix match so `status:warten` finds every "Warten auf …" variant
             // without the user typing the whole label.
-            clauses.push("lower(t.status) LIKE ?".into());
+            clauses.push("ulower(t.status) LIKE ?".into());
             args.push(Box::new(format!("{}%", status.to_lowercase())));
         }
 
         if let Some(priority) = q.priority.as_ref().filter(|s| !s.is_empty()) {
-            clauses.push("lower(t.priority) = ?".into());
+            clauses.push("ulower(t.priority) = ?".into());
             args.push(Box::new(priority.to_lowercase()));
         }
 
@@ -301,6 +455,11 @@ impl Store {
             new: count(Bucket::New)?,
             mine: count(Bucket::Mine)?,
             all: count(Bucket::All)?,
+            archive: conn.query_row(
+                "SELECT COUNT(*) FROM tickets WHERE archived = 1",
+                [],
+                |r| r.get(0),
+            )?,
         })
     }
 
@@ -328,7 +487,8 @@ impl Store {
     pub fn clear(&self) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch(
-            "DELETE FROM ticket_buckets; DELETE FROM tickets; DELETE FROM meta;",
+            "DELETE FROM ticket_buckets; DELETE FROM tickets; \
+             DELETE FROM companies; DELETE FROM meta;",
         )?;
         Ok(())
     }
@@ -371,10 +531,57 @@ fn row_to_ticket(row: &rusqlite::Row) -> Result<Ticket, rusqlite::Error> {
     })
 }
 
+/// Registers `ulower(text)`, a Unicode-aware replacement for SQLite's own
+/// `lower()`.
+///
+/// The built-in folds ASCII only, so a customer stored as "MÜLLER GMBH" does
+/// not match a search for "müller" — the Ü survives `lower()` untouched while
+/// the needle, lowercased in Rust, does not. On German customer names that is
+/// not a corner case, and it would have shown up as the search box suggesting a
+/// company whose tickets the very next query then failed to find.
+fn register_unicode_lower(conn: &Connection) -> Result<(), StoreError> {
+    conn.create_scalar_function(
+        "ulower",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            Ok(ctx
+                .get_raw(0)
+                .as_str()
+                .map(str::to_lowercase)
+                .unwrap_or_default())
+        },
+    )?;
+    Ok(())
+}
+
+/// Adds a column to an existing table when a previous version wrote the
+/// database without it. `ALTER TABLE ... ADD COLUMN` has no `IF NOT EXISTS`, so
+/// the column list is checked first.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), StoreError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<_, _>>()?;
+
+    if existing.iter().any(|name| name == column) {
+        return Ok(());
+    }
+
+    conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"))?;
+    Ok(())
+}
+
 fn upsert_ticket(
     conn: &Connection,
     ticket: &Ticket,
     synced_at: i64,
+    archived: bool,
 ) -> Result<(), StoreError> {
     conn.execute(
         r#"
@@ -383,10 +590,10 @@ fn upsert_ticket(
             ticket_creator, ticket_user, ticket_user_phone, ticket_terminated_user, pool_name,
             play_status, attachments, my_ticket_id, location_id, dyn_template_id,
             company, company_id, company_name, created_at, created_at_sortable, ticket_start,
-            ticket_messages_count, template_data, synced_at
+            ticket_messages_count, template_data, synced_at, archived
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-            ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
+            ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
         )
         ON CONFLICT(id) DO UPDATE SET
             description = excluded.description,
@@ -414,7 +621,8 @@ fn upsert_ticket(
             ticket_start = excluded.ticket_start,
             ticket_messages_count = excluded.ticket_messages_count,
             template_data = excluded.template_data,
-            synced_at = excluded.synced_at
+            synced_at = excluded.synced_at,
+            archived = excluded.archived
         "#,
         params![
             ticket.id,
@@ -444,6 +652,7 @@ fn upsert_ticket(
             ticket.ticket_messages_count,
             ticket.template_data,
             synced_at,
+            i64::from(archived),
         ],
     )?;
     Ok(())
@@ -485,6 +694,10 @@ pub struct TicketQuery {
     /// Substring match on the company name, from a `firma:` term. Distinct
     /// from `search`, which also spans summary, description and template data.
     pub company_name: Option<String>,
+    /// `Some(true)` asks for cached closed tickets only, `Some(false)` for live
+    /// ones only. `None` spans both, which is what a lookup by ticket number
+    /// wants.
+    pub archived: Option<bool>,
     pub status: Option<String>,
     pub priority: Option<String>,
     pub date_from: Option<String>,
@@ -500,6 +713,10 @@ pub struct BucketCounts {
     pub new: i64,
     pub mine: i64,
     pub all: i64,
+    /// Closed tickets currently cached. Unlike the others this is not a
+    /// server-side total — it counts what has been pulled into the archive so
+    /// far, which is what the tab needs to label itself.
+    pub archive: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

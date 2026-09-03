@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSearch, removeChip } from './searchQuery';
+import { activeTermAt, parseSearch, removeChip, setTermValue } from './searchQuery';
 
 describe('parseSearch', () => {
   it('reads a bare number as a ticket id', () => {
@@ -103,5 +103,77 @@ describe('removeChip', () => {
   it('leaves the query usable after removing the only term', () => {
     const { chips } = parseSearch('firma:müller');
     expect(removeChip('firma:müller', chips[0])).toBe('');
+  });
+});
+
+describe('activeTermAt', () => {
+  it('reports the term the caret is inside, not the last one typed', () => {
+    const query = 'firma:mül status:offen';
+    // Caret still in the company term, after going back to edit it.
+    const term = activeTermAt(query, 'firma:mül'.length);
+
+    expect(term?.field).toBe('firma');
+    expect(term?.filter).toBe('companyName');
+    expect(term?.value).toBe('mül');
+  });
+
+  it('treats a bare field as an active term so suggestions open immediately', () => {
+    const term = activeTermAt('firma:', 6);
+    expect(term?.field).toBe('firma');
+    expect(term?.value).toBe('');
+  });
+
+  it('keeps a quoted value in one piece', () => {
+    const query = 'firma:"Müller Logistik GmbH"';
+    const term = activeTermAt(query, query.length);
+
+    expect(term?.value).toBe('Müller Logistik GmbH');
+    expect(term?.end).toBe(query.length);
+  });
+
+  it('returns nothing for free text', () => {
+    expect(activeTermAt('exchange kaputt', 3)).toBeNull();
+  });
+
+  it('reports an unknown field without a filter', () => {
+    // So the box can leave it alone rather than guessing what it meant.
+    const term = activeTermAt('foo:bar', 7);
+    expect(term?.field).toBe('foo');
+    expect(term?.filter).toBeNull();
+  });
+});
+
+describe('setTermValue', () => {
+  it('completes the term the caret is in and leaves the rest alone', () => {
+    const query = 'firma:mül status:offen';
+    const term = activeTermAt(query, 'firma:mül'.length)!;
+
+    const { text } = setTermValue(query, term, 'Müller Logistik');
+    expect(text).toBe('firma:"Müller Logistik" status:offen');
+  });
+
+  it('quotes names with spaces, which would otherwise split into free text', () => {
+    const term = activeTermAt('firma:', 6)!;
+    const { text } = setTermValue('firma:', term, 'Müller Logistik GmbH');
+
+    // Unquoted, everything after the first word would be searched as free text.
+    expect(text).toBe('firma:"Müller Logistik GmbH"');
+    expect(parseSearch(text).filters.companyName).toBe('Müller Logistik GmbH');
+    expect(parseSearch(text).filters.search).toBeUndefined();
+  });
+
+  it('leaves the caret ready for the next term', () => {
+    const term = activeTermAt('firma:mül', 9)!;
+    const { text, caret } = setTermValue('firma:mül', term, 'Schmidt');
+
+    expect(text).toBe('firma:Schmidt');
+    expect(caret).toBe(text.length);
+  });
+
+  it('does not double the separator when one is already there', () => {
+    const query = 'firma:mül status:offen';
+    const term = activeTermAt(query, 3)!;
+
+    expect(setTermValue(query, term, 'Schmidt').text).toBe('firma:Schmidt status:offen');
   });
 });

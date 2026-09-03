@@ -147,8 +147,12 @@ function AppContent() {
         setActiveTab('my');
       } else if (tickets.new_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('new');
-      } else {
+      } else if (tickets.all_tickets.some((t) => t.id === ticket.id)) {
         setActiveTab('all');
+      } else {
+        // Closed, or otherwise outside every live list — going back would
+        // otherwise land on a tab the ticket is not in.
+        setActiveTab('archive');
       }
     }
 

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import { queryTickets } from '@/lib/sync';
+import { fetchTicketByNumber, queryTickets } from '@/lib/sync';
 import { parseSearch } from '@/lib/searchQuery';
 import { TONE_RAIL, priorityTone } from '@/lib/ticketStatus';
 import type { Ticket } from '@/types/api';
@@ -91,11 +91,18 @@ export function CommandPalette({
 
     const timer = setTimeout(async () => {
       try {
-        const found = await queryTickets({
-          ...parseSearch(trimmed).filters,
-          sort: 'date-desc',
-          limit: RESULT_LIMIT,
-        });
+        const filters = parseSearch(trimmed).filters;
+        const query = { ...filters, sort: 'date-desc' as const, limit: RESULT_LIMIT };
+        let found = await queryTickets(query);
+
+        // A ticket number the store does not have is very often a closed one,
+        // which `getTickets` filters out and so can never be synced. Ask the
+        // backend directly rather than reporting it as missing.
+        if (found.length === 0 && filters.id !== undefined) {
+          const fetched = await fetchTicketByNumber(filters.id);
+          if (fetched) found = [fetched];
+        }
+
         if (token === requestToken.current) setResults(found);
       } catch (error) {
         console.error('Palette search failed:', error);

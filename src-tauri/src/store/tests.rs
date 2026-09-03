@@ -1,5 +1,5 @@
 use super::*;
-use crate::api::models::{Company, Ticket};
+use crate::api::models::{Company, Customer, Ticket};
 
 fn ticket(id: i64, summary: &str) -> Ticket {
     Ticket {
@@ -261,7 +261,9 @@ fn filters_by_bucket_company_status_and_priority() {
 #[test]
 fn put_ticket_caches_without_claiming_bucket_membership() {
     let store = Store::open_in_memory().unwrap();
-    store.put_ticket(&ticket(77, "fetched by id"), 1).unwrap();
+    store
+        .put_ticket(&ticket(77, "fetched by id"), 1, true)
+        .unwrap();
 
     assert!(store.get_ticket(77).unwrap().is_some());
 
@@ -351,4 +353,303 @@ fn status_filter_matches_by_prefix() {
         .unwrap();
 
     assert_eq!(found.iter().map(|t| t.id).collect::<Vec<_>>(), vec![2]);
+}
+
+// --------------------------------------------------------------------------
+// The archive.
+//
+// getTicketsQuery filters `status_id != 4`, so a closed ticket is not merely
+// absent from the current pull — it can never appear in one. These tests pin
+// the consequence: the purge that keeps the live set honest must not treat an
+// archived row as stale.
+// --------------------------------------------------------------------------
+
+fn closed(id: i64, summary: &str) -> Ticket {
+    Ticket {
+        status: "Abgeschlossen".into(),
+        status_id: 4,
+        ..ticket(id, summary)
+    }
+}
+
+fn customer(id: i64, name: &str, number: &str) -> Customer {
+    Customer {
+        id,
+        name: name.into(),
+        number: number.into(),
+        zip: "50667".into(),
+        location: "Köln".into(),
+        passive: 0,
+    }
+}
+
+#[test]
+fn archived_tickets_survive_a_sync_that_never_mentions_them() {
+    let store = Store::open_in_memory().unwrap();
+
+    store.put_archived(&[closed(900, "letztes Jahr")], 1).unwrap();
+    // A perfectly ordinary sync: the closed ticket is nowhere in it, because
+    // the backend cannot return it.
+    store.replace_all(&[], &[ticket(1, "offen")], &[], 2).unwrap();
+
+    assert!(
+        store.get_ticket(900).unwrap().is_some(),
+        "the purge dropped a ticket the backend was never going to send"
+    );
+}
+
+#[test]
+fn the_archive_can_be_queried_on_its_own() {
+    let store = Store::open_in_memory().unwrap();
+
+    store.replace_all(&[], &[ticket(1, "offen")], &[], 1).unwrap();
+    store.put_archived(&[closed(900, "erledigt")], 1).unwrap();
+
+    let archived = store
+        .query(&TicketQuery {
+            archived: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(archived.iter().map(|t| t.id).collect::<Vec<_>>(), vec![900]);
+
+    let live = store
+        .query(&TicketQuery {
+            archived: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(live.iter().map(|t| t.id).collect::<Vec<_>>(), vec![1]);
+
+    // A lookup by number spans both, which is the point of leaving it None.
+    let both = store.query(&TicketQuery::default()).unwrap();
+    assert_eq!(both.len(), 2);
+}
+
+#[test]
+fn archiving_never_overwrites_a_ticket_the_live_sync_owns() {
+    let store = Store::open_in_memory().unwrap();
+    store.replace_all(&[], &[ticket(1, "offen")], &[], 1).unwrap();
+
+    // getCompanyById loads none of the relations getTickets does, so its copy
+    // of an open ticket is missing the subject, pool and message count.
+    let stripped = Ticket {
+        subject: String::new(),
+        pool_name: String::new(),
+        ticket_messages_count: 0,
+        ..ticket(1, "offen")
+    };
+    let written = store
+        .put_archived(&[stripped, closed(900, "erledigt")], 2)
+        .unwrap();
+
+    assert_eq!(written, 1, "only the ticket the sync does not own");
+
+    let live = store.get_ticket(1).unwrap().unwrap();
+    assert_eq!(live.subject, "E-Mail");
+    assert_eq!(live.pool_name, "Nord");
+    assert_eq!(live.ticket_messages_count, 2);
+}
+
+#[test]
+fn a_reopened_ticket_rejoins_the_live_set() {
+    let store = Store::open_in_memory().unwrap();
+    store.put_archived(&[closed(900, "erledigt")], 1).unwrap();
+
+    // Someone reopens it, so the next pull does include it.
+    let reopened = Ticket {
+        status: "Wieder geöffnet".into(),
+        status_id: 8,
+        ..ticket(900, "erledigt")
+    };
+    store.replace_all(&[], &[reopened], &[], 2).unwrap();
+
+    let archived = store
+        .query(&TicketQuery {
+            archived: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(archived.is_empty(), "it is live again, not archived");
+    assert_eq!(store.counts().unwrap().mine, 1);
+}
+
+#[test]
+fn counts_report_the_archive_separately() {
+    let store = Store::open_in_memory().unwrap();
+    store.replace_all(&[], &[ticket(1, "a")], &[], 1).unwrap();
+    store
+        .put_archived(&[closed(900, "x"), closed(901, "y")], 1)
+        .unwrap();
+
+    let counts = store.counts().unwrap();
+    assert_eq!(counts.mine, 1);
+    assert_eq!(counts.archive, 2);
+    // The archive is not a bucket, so it must not inflate the live tabs.
+    assert_eq!(counts.all, 0);
+}
+
+// --------------------------------------------------------------------------
+// Customer suggestions.
+// --------------------------------------------------------------------------
+
+#[test]
+fn customer_search_puts_the_name_you_started_typing_first() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_customers(
+            &[
+                customer(1, "Bäckerei Müller", "K-2001"),
+                customer(2, "Müller Logistik GmbH", "K-1042"),
+                customer(3, "Schmidt AG", "K-3003"),
+            ],
+            1,
+        )
+        .unwrap();
+
+    let hits = store.search_customers("müller", 10).unwrap();
+
+    // Both contain it; only one starts with it.
+    assert_eq!(
+        hits.iter().map(|c| c.id).collect::<Vec<_>>(),
+        vec![2, 1],
+        "a prefix match has to outrank a match buried mid-name"
+    );
+}
+
+#[test]
+fn customer_search_also_matches_the_customer_number() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_customers(&[customer(2, "Müller Logistik GmbH", "K-1042")], 1)
+        .unwrap();
+
+    let hits = store.search_customers("1042", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, 2);
+}
+
+#[test]
+fn an_empty_query_offers_something_to_pick_from() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_customers(
+            &[
+                customer(3, "Schmidt AG", "K-3003"),
+                customer(1, "Bäckerei Müller", "K-2001"),
+            ],
+            1,
+        )
+        .unwrap();
+
+    // Typing `firma:` alone should still drop a list down, alphabetically.
+    let hits = store.search_customers("", 10).unwrap();
+    assert_eq!(hits.iter().map(|c| c.id).collect::<Vec<_>>(), vec![1, 3]);
+
+    assert_eq!(store.search_customers("", 1).unwrap().len(), 1);
+}
+
+#[test]
+fn inactive_customers_rank_below_active_ones_without_disappearing() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_customers(
+            &[
+                Customer {
+                    passive: 1,
+                    ..customer(1, "Müller alt", "K-1")
+                },
+                customer(2, "Müller neu", "K-2"),
+            ],
+            1,
+        )
+        .unwrap();
+
+    let hits = store.search_customers("müller", 10).unwrap();
+    // Their closed tickets are exactly what an archive search is for, so a
+    // passive customer must still be reachable.
+    assert_eq!(hits.iter().map(|c| c.id).collect::<Vec<_>>(), vec![2, 1]);
+}
+
+#[test]
+fn signing_out_clears_the_customer_cache_too() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_customers(&[customer(1, "Müller Logistik", "K-1042")], 1)
+        .unwrap();
+
+    store.clear().unwrap();
+
+    assert!(store.search_customers("müller", 10).unwrap().is_empty());
+}
+
+#[test]
+fn an_upgraded_database_gains_the_archived_column() {
+    // Simulates a store written before archiving existed: the column is added
+    // in place rather than the cache being thrown away.
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE tickets (id INTEGER PRIMARY KEY);")
+        .unwrap();
+
+    add_column_if_missing(&conn, "tickets", "archived", "INTEGER NOT NULL DEFAULT 0").unwrap();
+    // Idempotent: startup runs it on every launch.
+    add_column_if_missing(&conn, "tickets", "archived", "INTEGER NOT NULL DEFAULT 0").unwrap();
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tickets WHERE archived = 0", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+// --------------------------------------------------------------------------
+// Case folding.
+//
+// SQLite's own lower() folds ASCII only, so "MÜLLER" stays "MÜLLER" while a
+// needle lowercased in Rust becomes "müller" and the two never meet. On German
+// customer names that is not a corner case: it would show a suggestion for a
+// company and then find none of its tickets.
+// --------------------------------------------------------------------------
+
+#[test]
+fn an_all_caps_customer_name_still_matches_a_lowercase_search() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_customers(&[customer(1, "MÜLLER LOGISTIK GMBH", "K-1042")], 1)
+        .unwrap();
+
+    let hits = store.search_customers("müller", 10).unwrap();
+    assert_eq!(hits.len(), 1, "SQLite's lower() would have missed this");
+}
+
+#[test]
+fn the_company_filter_folds_umlauts_the_same_way() {
+    let store = Store::open_in_memory().unwrap();
+    let t = Ticket {
+        company: Company {
+            id: 8,
+            name: "MÜLLER LOGISTIK GMBH".into(),
+            ..Default::default()
+        },
+        ..ticket(1, "offen")
+    };
+    store.replace_all(&[], &[t], &[], 1).unwrap();
+
+    let hits = store
+        .query(&TicketQuery {
+            company_name: Some("müller".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+
+    // And through free text, which spans the same column.
+    let hits = store
+        .query(&TicketQuery {
+            search: Some("MÜLLER".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(hits.len(), 1);
 }

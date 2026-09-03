@@ -269,6 +269,83 @@ impl TicketsResponse {
     }
 }
 
+/// The id of the "Abgeschlossen" status in the backend's `statuses` table.
+///
+/// Load-bearing: `getTicketsQuery` filters with `status_id != 4`, so a ticket
+/// reaching this value disappears from every list the sync pulls. Closed
+/// tickets are therefore only reachable one at a time (`getTicketById`) or a
+/// whole company at a time (`getCompanyById`).
+pub const CLOSED_STATUS_ID: i64 = 4;
+
+/// Status names by id, mirroring the backend's `statuses` seeder.
+///
+/// `getTickets` sends the name along because its query eager-loads the status
+/// relation. `getCompanyById` does not, so its ticket rows carry only
+/// `status_id` and the name has to be resolved here. Keeping the table in one
+/// place beats leaving every archived row with a blank status badge.
+pub fn status_name(id: i64) -> Option<&'static str> {
+    Some(match id {
+        1 => "Neu",
+        2 => "Terminiert",
+        3 => "Prüfen",
+        4 => "Abgeschlossen",
+        5 => "Ausstehend",
+        6 => "Vor Ort",
+        8 => "Wieder geöffnet",
+        9 => "Warten auf Rückmeldung vom Ticketbenutzer",
+        10 => "Reterminiert",
+        11 => "Warten auf Rückmeldung (extern)",
+        12 => "Zugewiesen",
+        13 => "In Bearbeitung",
+        _ => return None,
+    })
+}
+
+/// A customer, as `getCustomers` returns it.
+///
+/// That endpoint hands back whole Eloquent models with every column on them;
+/// only the fields a name lookup needs are kept. Cached locally so the search
+/// box can suggest companies without a round trip per keystroke.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Customer {
+    #[serde(default, deserialize_with = "flexible_i64")]
+    pub id: i64,
+    #[serde(default, deserialize_with = "flexible_string")]
+    pub name: String,
+    #[serde(default, deserialize_with = "flexible_string")]
+    pub number: String,
+    #[serde(default, deserialize_with = "flexible_string")]
+    pub zip: String,
+    /// The town, under the backend's own column name.
+    #[serde(default, deserialize_with = "flexible_string")]
+    pub location: String,
+    /// Non-zero for customers the backend marks inactive. Kept so they can be
+    /// ranked below active ones rather than hidden — their old tickets are
+    /// exactly what an archive search is for.
+    #[serde(default, deserialize_with = "flexible_i64")]
+    pub passive: i64,
+}
+
+/// Raw `getCustomers` response.
+///
+/// `Option<Customer>` for the same reason ticket lists use it: a null in the
+/// middle of the array must not discard every customer around it.
+#[derive(Debug, Deserialize)]
+pub struct CustomersResponse {
+    #[serde(default)]
+    pub customers: Vec<Option<Customer>>,
+}
+
+impl CustomersResponse {
+    pub fn into_customers(self) -> Vec<Customer> {
+        self.customers
+            .into_iter()
+            .flatten()
+            .filter(|c| c.id > 0 && !c.name.trim().is_empty())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

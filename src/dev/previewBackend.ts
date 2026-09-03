@@ -19,6 +19,21 @@ const COMPANIES = [
   { id: 23, name: 'Hoffmann Bau AG', number: 'K-3390' },
 ];
 
+/**
+ * The customer list behind the search box's suggestions.
+ *
+ * Deliberately wider than the four companies that own tickets, and deliberately
+ * full of names that share a prefix — the whole point of the feature is finding
+ * the right "Müller" without knowing how it was typed into the database.
+ */
+const CUSTOMERS = [
+  ...COMPANIES.map((c) => ({ ...c, zip: '50667', location: 'Köln', passive: 0 })),
+  { id: 31, name: 'MÜLLER & SÖHNE KG', number: 'K-4401', zip: '53111', location: 'Bonn', passive: 0 },
+  { id: 44, name: 'Müllermann Elektro', number: 'K-5120', zip: '50129', location: 'Bergheim', passive: 0 },
+  { id: 57, name: 'Bäckerei Müller', number: 'K-6033', zip: '50931', location: 'Köln', passive: 1 },
+  { id: 61, name: 'Schmidt Metallbau', number: 'K-7712', zip: '51105', location: 'Köln', passive: 0 },
+];
+
 const SUMMARIES: Array<[string, string, string, string]> = [
   ['Exchange-Server nimmt keine Mails an', 'E-Mail', 'VERY_HIGH', 'In Bearbeitung'],
   ['Drucker EG rechts offline nach Update', 'Drucker', 'HIGH', 'Warten auf Rückmeldung (extern)'],
@@ -118,6 +133,44 @@ const TICKETS = Array.from({ length: 24 }, (_, i) => makeTicket(i));
 const MINE = TICKETS.filter((t) => t.my_ticket_id !== 0);
 const POOL = TICKETS.filter((t) => t.my_ticket_id === 0);
 
+/**
+ * The archive, which only fills once something asks for it.
+ *
+ * Modelled on what the real endpoints hand back rather than on the live list:
+ * `getCompanyById` joins none of the relations `getTickets` does, so these
+ * carry no subject, pool or message count, and they are years old.
+ */
+const ARCHIVE: Array<ReturnType<typeof makeTicket>> = [];
+
+function makeArchivedTicket(i: number, companyIndex: number) {
+  const [summary] = SUMMARIES[i % SUMMARIES.length];
+  const company = COMPANIES[companyIndex];
+  const year = 2024 + (i % 2);
+
+  return {
+    ...makeTicket(i),
+    id: 3100 + i,
+    status: 'Abgeschlossen',
+    status_id: 4,
+    subject: '',
+    pool_name: '',
+    ticketMessagesCount: 0,
+    playStatus: null,
+    summary,
+    created_at: `${pad(1 + (i % 27))}-${pad(1 + (i % 12))}-${year} ${pad(8 + (i % 9))}:15`,
+    company: {
+      id: company.id,
+      name: company.name,
+      number: company.number,
+      companyMail: 'it@example.test',
+      companyPhone: '+49 221 5550100',
+      companyZip: '50667',
+      companyAdress: 'Hafenstraße 12',
+      locations: [],
+    },
+  };
+}
+
 function matches(ticket: ReturnType<typeof makeTicket>, query: Record<string, unknown>) {
   if (query.id && ticket.id !== query.id) return false;
 
@@ -148,12 +201,76 @@ function matches(ticket: ReturnType<typeof makeTicket>, query: Record<string, un
 
 const HANDLERS: Record<string, (args: any) => unknown> = {
   query_tickets: ({ query = {} }: any) => {
+    // Archived rows have no bucket, so asking for one never returns them —
+    // exactly as in SQLite, where the bucket join does the excluding.
     const source =
-      query.bucket === 'mine' ? MINE : query.bucket === 'new' ? POOL : TICKETS;
+      query.archived === true
+        ? ARCHIVE
+        : query.bucket === 'mine'
+          ? MINE
+          : query.bucket === 'new'
+            ? POOL
+            : query.archived === undefined
+              ? [...TICKETS, ...ARCHIVE]
+              : TICKETS;
     const rows = source.filter((t) => matches(t, query));
     return query.limit ? rows.slice(0, query.limit) : rows;
   },
-  ticket_counts: () => ({ new: POOL.length, mine: MINE.length, all: TICKETS.length }),
+  ticket_counts: () => ({
+    new: POOL.length,
+    mine: MINE.length,
+    all: TICKETS.length,
+    archive: ARCHIVE.length,
+  }),
+  search_customers: ({ query = '', limit = 8 }: any) => {
+    const needle = String(query).trim().toLowerCase();
+    const rank = (name: string) => {
+      const lower = name.toLowerCase();
+      if (!needle || lower === needle) return 0;
+      return lower.startsWith(needle) ? 1 : 2;
+    };
+
+    return CUSTOMERS.filter(
+      (c) =>
+        !needle ||
+        c.name.toLowerCase().includes(needle) ||
+        c.number.toLowerCase().includes(needle),
+    )
+      .sort(
+        (a, b) =>
+          rank(a.name) - rank(b.name) ||
+          a.passive - b.passive ||
+          (needle ? a.name.length - b.name.length : 0) ||
+          a.name.localeCompare(b.name),
+      )
+      .slice(0, limit);
+  },
+  fetch_company_archive: ({ companyId }: any) => {
+    const index = COMPANIES.findIndex((c) => c.id === companyId);
+    if (index < 0) return { returned: 0, cached: 0, closed: 0 };
+
+    const fetched = Array.from({ length: 9 }, (_, i) => makeArchivedTicket(i, index));
+    for (const ticket of fetched) {
+      if (!ARCHIVE.some((existing) => existing.id === ticket.id)) ARCHIVE.push(ticket);
+    }
+
+    return { returned: fetched.length + 2, cached: fetched.length, closed: fetched.length };
+  },
+  fetch_ticket_by_number: ({ ticketId }: any) => {
+    const known = [...TICKETS, ...ARCHIVE].find((t) => t.id === ticketId);
+    if (known) return known;
+
+    // The case the command exists for: a closed ticket the sync has never
+    // seen and never could. getTicketById returns it all the same.
+    if (ticketId >= 3100 && ticketId < 3200) {
+      const fetched = makeArchivedTicket(ticketId - 3100, ticketId % COMPANIES.length);
+      fetched.id = ticketId;
+      ARCHIVE.push(fetched);
+      return fetched;
+    }
+
+    return null;
+  },
   get_ticket: ({ ticketId }: any) => TICKETS.find((t) => t.id === ticketId) ?? TICKETS[0],
   sync_status: () => ({
     state: 'ok',
@@ -161,7 +278,12 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
     lastError: null,
     retrying: false,
     droppedLastSync: 0,
-    counts: { new: POOL.length, mine: MINE.length, all: TICKETS.length },
+    counts: {
+      new: POOL.length,
+      mine: MINE.length,
+      all: TICKETS.length,
+      archive: ARCHIVE.length,
+    },
   }),
   sync_start: () => null,
   sync_stop: () => null,
