@@ -653,3 +653,125 @@ fn the_company_filter_folds_umlauts_the_same_way() {
         .unwrap();
     assert_eq!(hits.len(), 1);
 }
+
+// --------------------------------------------------------------------------
+// Timers.
+//
+// The backend cannot say how long a running timer has been going:
+// getPlayerStatus computes the elapsed seconds into $total_raw_time and then
+// assigns $total_raw_time = 0 before returning, and its total_time is a
+// rounded billing figure that stays 0 until the first pause. This is the
+// client's own record, and it has to survive a window being closed.
+// --------------------------------------------------------------------------
+
+const T0: i64 = 1_700_000_000_000;
+const MINUTE: i64 = 60_000;
+
+#[test]
+fn a_running_timer_survives_the_window_closing() {
+    let store = Store::open_in_memory().unwrap();
+    store.timer_start(4812, 17, T0).unwrap();
+
+    // Reopened five minutes later: a fresh read, as a new window would do.
+    let timer = store.timer(4812, 17, T0 + 5 * MINUTE).unwrap().unwrap();
+
+    assert!(timer.running);
+    assert_eq!(timer.elapsed_ms, 5 * MINUTE, "it restarted from zero");
+}
+
+#[test]
+fn pausing_banks_the_time_and_resuming_continues_from_it() {
+    let store = Store::open_in_memory().unwrap();
+
+    store.timer_start(4812, 17, T0).unwrap();
+    store.timer_pause(4812, 17, T0 + 5 * MINUTE).unwrap();
+
+    let paused = store.timer(4812, 17, T0 + 60 * MINUTE).unwrap().unwrap();
+    assert!(!paused.running);
+    // An hour of being paused adds nothing.
+    assert_eq!(paused.elapsed_ms, 5 * MINUTE);
+
+    store.timer_resume(4812, 17, 0, T0 + 60 * MINUTE).unwrap();
+    let resumed = store.timer(4812, 17, T0 + 63 * MINUTE).unwrap().unwrap();
+
+    assert!(resumed.running);
+    assert_eq!(resumed.elapsed_ms, 8 * MINUTE);
+}
+
+#[test]
+fn resuming_a_running_timer_does_not_restart_it() {
+    // Two windows are open; both reconcile with the server and both see it
+    // running. The second must not reset the first.
+    let store = Store::open_in_memory().unwrap();
+    store.timer_start(4812, 17, T0).unwrap();
+
+    store.timer_resume(4812, 17, 0, T0 + 5 * MINUTE).unwrap();
+
+    let timer = store.timer(4812, 17, T0 + 5 * MINUTE).unwrap().unwrap();
+    assert_eq!(timer.elapsed_ms, 5 * MINUTE);
+}
+
+#[test]
+fn a_timer_started_elsewhere_is_adopted_with_what_the_server_knew() {
+    // Started from the web UI, so there is no local record; the server's
+    // rounded total is the only figure available.
+    let store = Store::open_in_memory().unwrap();
+
+    store.timer_resume(4812, 17, 15 * MINUTE, T0).unwrap();
+
+    let timer = store.timer(4812, 17, T0 + 2 * MINUTE).unwrap().unwrap();
+    assert!(timer.running);
+    assert_eq!(timer.elapsed_ms, 17 * MINUTE);
+}
+
+#[test]
+fn timers_are_per_ticket_and_per_user() {
+    let store = Store::open_in_memory().unwrap();
+    store.timer_start(4812, 17, T0).unwrap();
+
+    assert!(store.timer(4813, 17, T0).unwrap().is_none());
+    assert!(store.timer(4812, 18, T0).unwrap().is_none());
+}
+
+#[test]
+fn clearing_forgets_the_timer() {
+    let store = Store::open_in_memory().unwrap();
+    store.timer_start(4812, 17, T0).unwrap();
+
+    store.timer_clear(4812, 17).unwrap();
+
+    assert!(store.timer(4812, 17, T0).unwrap().is_none());
+}
+
+#[test]
+fn a_clock_that_jumps_backwards_never_counts_down() {
+    // NTP corrections and manual clock changes both do this.
+    let store = Store::open_in_memory().unwrap();
+    store.timer_start(4812, 17, T0).unwrap();
+
+    let timer = store.timer(4812, 17, T0 - 10 * MINUTE).unwrap().unwrap();
+    assert_eq!(timer.elapsed_ms, 0);
+}
+
+#[test]
+fn signing_out_clears_timers_with_everything_else() {
+    let store = Store::open_in_memory().unwrap();
+    store.timer_start(4812, 17, T0).unwrap();
+
+    store.clear().unwrap();
+
+    assert!(store.timer(4812, 17, T0).unwrap().is_none());
+}
+
+#[test]
+fn a_timer_outlives_the_sync_purge() {
+    // Timers are keyed by ticket, and a ticket can leave the live set while
+    // its clock is still running — being closed by someone else, say.
+    let store = Store::open_in_memory().unwrap();
+    store.replace_all(&[], &[ticket(4812, "offen")], &[], 1).unwrap();
+    store.timer_start(4812, 17, T0).unwrap();
+
+    store.replace_all(&[], &[], &[], 2).unwrap();
+
+    assert!(store.timer(4812, 17, T0 + MINUTE).unwrap().is_some());
+}

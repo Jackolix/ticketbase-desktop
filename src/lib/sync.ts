@@ -220,6 +220,53 @@ export function fetchTicketByNumber(ticketId: number): Promise<Ticket | null> {
   return invoke<Ticket | null>('fetch_ticket_by_number', { ticketId });
 }
 
+/**
+ * This client's own record of a ticket timer.
+ *
+ * The backend cannot supply this. `getPlayerStatus` computes the elapsed
+ * seconds into `$total_raw_time` and then assigns `$total_raw_time = 0` on the
+ * next line, so the field is always "0"; and its `total_time` is a billing
+ * figure rounded up to the customer's block, which `calculateTotalTime`
+ * returns as 0 until the first pause. A reopened window therefore had nothing
+ * to restore from and started counting at zero.
+ *
+ * Kept in SQLite rather than in a window, so the ticket window and the main
+ * window show the same clock and both survive a restart.
+ */
+export interface Timer {
+  ticketId: number;
+  userId: number;
+  running: boolean;
+  /** Unix millis when the current run began; null while paused. */
+  startedAt: number | null;
+  /** Time banked by earlier runs. */
+  accumulatedMs: number;
+  /** `accumulatedMs` plus the current run, as of the moment it was read. */
+  elapsedMs: number;
+}
+
+export type TimerAction = 'start' | 'resume' | 'pause' | 'clear';
+
+/** The local timer for a ticket, or null when there is none (or no session). */
+export function timerStatus(ticketId: number): Promise<Timer | null> {
+  return invoke<Timer | null>('timer_status', { ticketId });
+}
+
+/**
+ * Records a timer transition and returns the resulting snapshot.
+ *
+ * `baseMs` is only used by `resume` when there is no local record — the case
+ * where the clock was started somewhere this app never saw, such as the web
+ * UI — to seed the total from whatever the server could tell us.
+ */
+export function timerRecord(
+  ticketId: number,
+  action: TimerAction,
+  baseMs?: number,
+): Promise<Timer | null> {
+  return invoke<Timer | null>('timer_record', { ticketId, action, baseMs });
+}
+
 export function onSyncStatus(handler: (status: SyncStatus) => void): Promise<UnlistenFn> {
   return listen<SyncStatus>(EVENT_SYNC_STATUS, (event) => handler(event.payload));
 }

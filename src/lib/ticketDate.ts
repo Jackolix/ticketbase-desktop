@@ -68,3 +68,34 @@ export function compareTicketDates(a: string, b: string): number {
 
   return da.getTime() - db.getTime();
 }
+
+/**
+ * How long ago a ticket was created, in German, at the coarsest unit that is
+ * still informative.
+ *
+ * "vor 3 Tagen" answers the question a queue actually raises; "vor 4380
+ * Minuten" does not. Returns null for a timestamp that cannot be parsed, and
+ * for one in the future — a clock skew between the server and this machine
+ * should read as nothing rather than as "vor -2 Min.".
+ */
+export function formatTicketAge(createdAt: string, now: Date = new Date()): string | null {
+  const created = parseTicketDate(createdAt);
+  if (created === null) return null;
+
+  const minutes = Math.floor((now.getTime() - created.getTime()) / 60000);
+  if (minutes < 0) return null;
+  if (minutes < 1) return 'gerade eben';
+  if (minutes < 60) return `vor ${minutes} Min.`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `vor ${hours} Std.`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 31) return `vor ${days} ${days === 1 ? 'Tag' : 'Tagen'}`;
+
+  const months = Math.floor(days / 30);
+  if (months < 12) return `vor ${months} ${months === 1 ? 'Monat' : 'Monaten'}`;
+
+  const years = Math.floor(days / 365);
+  return `vor ${years} ${years === 1 ? 'Jahr' : 'Jahren'}`;
+}

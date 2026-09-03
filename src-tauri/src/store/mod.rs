@@ -11,6 +11,15 @@
 //! with `status_id != 4`, so no amount of syncing will ever bring one in. They
 //! are fetched on demand instead and marked `archived`, which is what exempts
 //! them from the purge that drops anything missing from the latest pull.
+//!
+//! The `timers` table exists for a related reason. The backend knows when a
+//! running timer started — it is `TWatch.created_at` — but no endpoint returns
+//! it: `getPlayerStatus` computes the elapsed seconds into `$total_raw_time`
+//! and then assigns `$total_raw_time = 0` on the next line, and its
+//! `total_time` is a billing figure that stays 0 until the first pause. So a
+//! reopened window had nothing to restore from and started counting at zero.
+//! This table is the client's own record, and living here rather than in a
+//! window means every window agrees on it.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -117,6 +126,16 @@ impl Store {
             );
 
             CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name COLLATE NOCASE);
+
+            CREATE TABLE IF NOT EXISTS timers (
+                ticket_id      INTEGER NOT NULL,
+                user_id        INTEGER NOT NULL,
+                state          TEXT NOT NULL,
+                started_at     INTEGER,
+                accumulated_ms INTEGER NOT NULL DEFAULT 0,
+                updated_at     INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (ticket_id, user_id)
+            );
             "#,
         )?;
 
@@ -463,6 +482,108 @@ impl Store {
         })
     }
 
+    /// The timer for one ticket, with its elapsed time computed as of `now`.
+    pub fn timer(
+        &self,
+        ticket_id: i64,
+        user_id: i64,
+        now: i64,
+    ) -> Result<Option<Timer>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.query_row(
+            "SELECT ticket_id, user_id, state, started_at, accumulated_ms \
+             FROM timers WHERE ticket_id = ?1 AND user_id = ?2",
+            params![ticket_id, user_id],
+            |row| {
+                let state: String = row.get(2)?;
+                let started_at: Option<i64> = row.get(3)?;
+                let accumulated_ms: i64 = row.get(4)?;
+
+                Ok(Timer {
+                    ticket_id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    running: state == "playing",
+                    started_at,
+                    accumulated_ms,
+                    elapsed_ms: elapsed(state == "playing", started_at, accumulated_ms, now),
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Starts a timer from zero, discarding anything previously recorded.
+    pub fn timer_start(&self, ticket_id: i64, user_id: i64, now: i64) -> Result<(), StoreError> {
+        self.write_timer(ticket_id, user_id, "playing", Some(now), 0, now)
+    }
+
+    /// Resumes a paused timer, or adopts one whose history we do not have.
+    ///
+    /// `base_ms` seeds the accumulated total when there is no local record —
+    /// the case where the clock was started somewhere else entirely, such as
+    /// the web UI.
+    pub fn timer_resume(
+        &self,
+        ticket_id: i64,
+        user_id: i64,
+        base_ms: i64,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        let accumulated = match self.timer(ticket_id, user_id, now)? {
+            Some(timer) if timer.running => return Ok(()),
+            Some(timer) => timer.accumulated_ms,
+            None => base_ms.max(0),
+        };
+
+        self.write_timer(ticket_id, user_id, "playing", Some(now), accumulated, now)
+    }
+
+    /// Folds the current run into the total and stops the clock.
+    pub fn timer_pause(&self, ticket_id: i64, user_id: i64, now: i64) -> Result<(), StoreError> {
+        let accumulated = match self.timer(ticket_id, user_id, now)? {
+            Some(timer) => timer.elapsed_ms,
+            // Nothing recorded: a pause is still worth remembering as a zero,
+            // so the next resume does not look like a fresh start.
+            None => 0,
+        };
+
+        self.write_timer(ticket_id, user_id, "paused", None, accumulated, now)
+    }
+
+    /// Forgets a timer entirely. Called when the work session ends.
+    pub fn timer_clear(&self, ticket_id: i64, user_id: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            "DELETE FROM timers WHERE ticket_id = ?1 AND user_id = ?2",
+            params![ticket_id, user_id],
+        )?;
+        Ok(())
+    }
+
+    fn write_timer(
+        &self,
+        ticket_id: i64,
+        user_id: i64,
+        state: &str,
+        started_at: Option<i64>,
+        accumulated_ms: i64,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            "INSERT INTO timers (ticket_id, user_id, state, started_at, accumulated_ms, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(ticket_id, user_id) DO UPDATE SET \
+                 state = excluded.state, \
+                 started_at = excluded.started_at, \
+                 accumulated_ms = excluded.accumulated_ms, \
+                 updated_at = excluded.updated_at",
+            params![ticket_id, user_id, state, started_at, accumulated_ms, now],
+        )?;
+        Ok(())
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute(
@@ -488,7 +609,7 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch(
             "DELETE FROM ticket_buckets; DELETE FROM tickets; \
-             DELETE FROM companies; DELETE FROM meta;",
+             DELETE FROM companies; DELETE FROM timers; DELETE FROM meta;",
         )?;
         Ok(())
     }
@@ -706,6 +827,34 @@ pub struct TicketQuery {
     pub sort: TicketSort,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+/// A timer as this client records it.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Timer {
+    pub ticket_id: i64,
+    pub user_id: i64,
+    pub running: bool,
+    /// When the current run began, in unix millis. None while paused.
+    pub started_at: Option<i64>,
+    /// Time banked by earlier runs.
+    pub accumulated_ms: i64,
+    /// `accumulated_ms` plus the current run, as of the moment it was read.
+    pub elapsed_ms: i64,
+}
+
+/// Total elapsed time, guarding against a clock that has moved backwards.
+///
+/// System time is not monotonic — an NTP correction or a manual change can put
+/// `now` before `started_at`, and a negative run would show the timer counting
+/// down.
+fn elapsed(running: bool, started_at: Option<i64>, accumulated_ms: i64, now: i64) -> i64 {
+    let current = match (running, started_at) {
+        (true, Some(started)) => (now - started).max(0),
+        _ => 0,
+    };
+    accumulated_ms.max(0) + current
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

@@ -129,6 +129,8 @@ pub fn run() {
             commands::search_customers,
             commands::fetch_company_archive,
             commands::fetch_ticket_by_number,
+            commands::timer_status,
+            commands::timer_record,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

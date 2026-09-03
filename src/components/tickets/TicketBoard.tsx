@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Archive,
@@ -48,6 +48,9 @@ import {
   setTermValue,
 } from '@/lib/searchQuery';
 import { searchCustomers, type Customer, type TicketSort } from '@/lib/sync';
+import { useHotkey } from '@/hooks/useHotkey';
+import { ScheduleTicketDialog, TicketRowMenu } from './TicketRowMenu';
+import { TicketHoverPreview, type PreviewAnchor } from './TicketPreviewCard';
 import type { Ticket } from '@/types/api';
 
 interface TicketBoardProps {
@@ -80,6 +83,11 @@ const DENSITIES: Density[] = ['compact', 'comfortable', 'large'];
  * The Archiv tab is not a fourth server-side list. `getTicketsQuery` filters
  * `status_id != 4`, so closed tickets are unreachable by syncing and have to be
  * fetched deliberately — by number, or one customer at a time.
+ *
+ * A row is terse by design, so two things reach past it without opening the
+ * ticket: hovering shows the full preview, and right-clicking offers the
+ * actions — starting the clock, taking the ticket, scheduling it — that
+ * otherwise cost a round trip through the detail page.
  */
 export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
   const {
@@ -103,11 +111,16 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
   const [highlighted, setHighlighted] = useState(0);
   const [customerHits, setCustomerHits] = useState<Customer[]>([]);
   const [density, setDensity] = useState<Density>(readDensity);
+  /** The ticket whose scheduling dialog is open, if any. */
+  const [scheduleTarget, setScheduleTarget] = useState<Ticket | null>(null);
+  /** The hover preview: which ticket, and where to put it. */
+  const [preview, setPreview] = useState<{ ticket: Ticket; anchor: PreviewAnchor } | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
   /** Where to put the caret after a suggestion rewrote the query. */
   const pendingCaret = useRef<number | null>(null);
+  const hoverTimer = useRef<number | null>(null);
 
   const tokens = DENSITY[density];
   const activeTab = (navigationState.activeTab ?? 'my') as BoardTab;
@@ -145,17 +158,11 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
     setCaret(position);
   }, [draft]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
-        event.preventDefault();
-        searchRef.current?.focus();
-        searchRef.current?.select();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  useHotkey('mod+f', (event) => {
+    event.preventDefault();
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  });
 
   // Restore the scroll offset for whichever tab just became active.
   useEffect(() => {
@@ -275,6 +282,10 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
   const onSearchKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
       if (event.key === 'Escape') {
+        // Close the suggestions first, and only those: the board-level Escape
+        // clears the whole query, which is not what someone dismissing a
+        // dropdown meant.
+        if (suggestionsOpen) event.stopPropagation();
         setShowSuggestions(false);
         return;
       }
@@ -302,11 +313,59 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
     setCaret(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
   }, []);
 
+  const hidePreview = useCallback(() => {
+    if (hoverTimer.current !== null) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    setPreview((current) => (current === null ? current : null));
+  }, []);
+
+  /**
+   * Opens the preview after a pause.
+   *
+   * The delay is what keeps this from being unusable: without it, dragging the
+   * pointer down a list of forty rows flashes forty cards. The anchor is taken
+   * once, on entry, rather than tracking the mouse — a card that follows the
+   * cursor is harder to read than one that stays put.
+   */
+  const showPreview = useCallback(
+    (ticket: Ticket, event: React.MouseEvent<HTMLTableRowElement>) => {
+      if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
+
+      const rect = event.currentTarget.getBoundingClientRect();
+      const anchor: PreviewAnchor = { x: event.clientX, top: rect.top, bottom: rect.bottom };
+
+      hoverTimer.current = window.setTimeout(() => {
+        hoverTimer.current = null;
+        setPreview({ ticket, anchor });
+      }, HOVER_DELAY_MS);
+    },
+    [],
+  );
+
+  // The anchor is a viewport position, so it goes stale the moment anything
+  // moves underneath it.
+  useEffect(() => {
+    if (!preview) return;
+    window.addEventListener('wheel', hidePreview, { passive: true });
+    window.addEventListener('resize', hidePreview);
+    return () => {
+      window.removeEventListener('wheel', hidePreview);
+      window.removeEventListener('resize', hidePreview);
+    };
+  }, [preview, hidePreview]);
+
+  // Leaving the board entirely — switching tabs, unmounting — must not strand
+  // a card on screen with no row under it.
+  useEffect(() => hidePreview, [activeTab, rows, hidePreview]);
+
   const handleScroll = useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
+      hidePreview();
       setScrollPosition(activeTab, event.currentTarget.scrollTop);
     },
-    [activeTab, setScrollPosition],
+    [activeTab, setScrollPosition, hidePreview],
   );
 
   const openInWindow = useCallback(async (ticket: Ticket, event: React.MouseEvent) => {
@@ -330,6 +389,10 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
     setCaret(0);
     clearFilters();
   }, [clearFilters]);
+
+  // Escape empties the search. Only when there is one — otherwise the key
+  // would appear to do nothing, which is worse than not binding it.
+  useHotkey('escape', () => resetSearch(), { enabled: hasQuery || draft.length > 0 });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -543,13 +606,21 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
             </thead>
             <tbody>
               {rows.map((ticket) => (
-                <TicketRow
+                <TicketRowMenu
                   key={ticket.id}
                   ticket={ticket}
-                  tokens={tokens}
-                  onSelect={() => onTicketSelect(ticket, true)}
-                  onOpenWindow={(e) => void openInWindow(ticket, e)}
-                />
+                  onOpen={() => onTicketSelect(ticket, true)}
+                  onSchedule={() => setScheduleTarget(ticket)}
+                >
+                  <TicketRow
+                    ticket={ticket}
+                    tokens={tokens}
+                    onSelect={() => onTicketSelect(ticket, true)}
+                    onOpenWindow={(e) => void openInWindow(ticket, e)}
+                    onHoverStart={(event) => showPreview(ticket, event)}
+                    onHoverEnd={hidePreview}
+                  />
+                </TicketRowMenu>
               ))}
             </tbody>
           </table>
@@ -561,9 +632,17 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
         {hasQuery ? ' gefunden' : ''}
         {isLookingUpNumber && ' · Ticketnummer wird beim Server angefragt …'}
       </p>
+
+      {preview && <TicketHoverPreview ticket={preview.ticket} anchor={preview.anchor} />}
+
+      {/* One dialog for the whole board rather than one per row. */}
+      <ScheduleTicketDialog ticket={scheduleTarget} onClose={() => setScheduleTarget(null)} />
     </div>
   );
 }
+
+/** How long the pointer has to rest on a row before its preview opens. */
+const HOVER_DELAY_MS = 450;
 
 interface Suggestion {
   key: string;
@@ -712,31 +791,47 @@ function formatCreated(value: string): string {
   );
 }
 
-function TicketRow({
-  ticket,
-  tokens,
-  onSelect,
-  onOpenWindow,
-}: {
+interface TicketRowProps extends React.HTMLAttributes<HTMLTableRowElement> {
   ticket: Ticket;
   tokens: DensityTokens;
   onSelect: () => void;
   onOpenWindow: (event: React.MouseEvent) => void;
-}) {
+  onHoverStart: (event: React.MouseEvent<HTMLTableRowElement>) => void;
+  onHoverEnd: () => void;
+}
+
+/**
+ * Forwards its ref and spreads the rest of its props onto the `tr`.
+ *
+ * Both are what let the context menu wrap the row: Radix hands its trigger
+ * props to this component, and they have to reach the actual element.
+ */
+const TicketRow = forwardRef<HTMLTableRowElement, TicketRowProps>(function TicketRow(
+  { ticket, tokens, onSelect, onOpenWindow, onHoverStart, onHoverEnd, ...rest },
+  ref,
+) {
   const running = isRunning(ticket.playStatus);
   const playing = toPlayerState(ticket.playStatus) !== 'stopped';
 
   return (
     <tr
-      onClick={onSelect}
+      ref={ref}
+      {...rest}
+      onClick={(event) => {
+        rest.onClick?.(event);
+        onSelect();
+      }}
+      onMouseEnter={onHoverStart}
+      onMouseLeave={onHoverEnd}
       onKeyDown={(e) => {
+        rest.onKeyDown?.(e);
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onSelect();
         }
       }}
       tabIndex={0}
-      className="group cursor-pointer border-b transition-colors last:border-0 hover:bg-accent/50 focus:bg-accent/50 focus:outline-none"
+      className="group cursor-pointer border-b transition-colors last:border-0 hover:bg-accent/50 focus:bg-accent/50 focus:outline-none data-[state=open]:bg-accent/50"
     >
       {/* Priority rail: severity readable without parsing text.
           The cell is stretched to the row so the rail is continuous — a fixed
@@ -818,7 +913,7 @@ function TicketRow({
       </td>
     </tr>
   );
-}
+});
 
 function SkeletonRows({ tokens }: { tokens: DensityTokens }) {
   return (

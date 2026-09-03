@@ -142,6 +142,23 @@ const POOL = TICKETS.filter((t) => t.my_ticket_id === 0);
  */
 const ARCHIVE: Array<ReturnType<typeof makeTicket>> = [];
 
+interface PreviewTimer {
+  ticketId: number;
+  userId: number;
+  running: boolean;
+  startedAt: number | null;
+  accumulatedMs: number;
+  elapsedMs: number;
+}
+
+const TIMERS = new Map<number, PreviewTimer>();
+
+function timerElapsed(timer: PreviewTimer | undefined, now: number): number {
+  if (!timer) return 0;
+  const current = timer.running && timer.startedAt ? Math.max(0, now - timer.startedAt) : 0;
+  return Math.max(0, timer.accumulatedMs) + current;
+}
+
 function makeArchivedTicket(i: number, companyIndex: number) {
   const [summary] = SUMMARIES[i % SUMMARIES.length];
   const company = COMPANIES[companyIndex];
@@ -181,6 +198,8 @@ function matches(ticket: ReturnType<typeof makeTicket>, query: Record<string, un
       .toLowerCase();
     if (!haystack.includes(needle)) return false;
   }
+
+  if (query.companyId && ticket.company.id !== query.companyId) return false;
 
   if (query.companyName) {
     if (!ticket.company.name.toLowerCase().includes(String(query.companyName).toLowerCase())) {
@@ -256,6 +275,55 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
 
     return { returned: fetched.length + 2, cached: fetched.length, closed: fetched.length };
   },
+  /**
+   * Timers, kept in memory the way the Rust store keeps them on disk.
+   *
+   * The point being exercised is that reopening a ticket does not reset the
+   * clock, so the record has to outlive the component.
+   */
+  timer_status: ({ ticketId }: any) => TIMERS.get(ticketId) ?? null,
+  timer_record: ({ ticketId, action, baseMs }: any) => {
+    const now = Date.now();
+    const existing = TIMERS.get(ticketId);
+
+    if (action === 'clear') {
+      TIMERS.delete(ticketId);
+      return null;
+    }
+
+    if (action === 'start') {
+      TIMERS.set(ticketId, {
+        ticketId,
+        userId: 17,
+        running: true,
+        startedAt: now,
+        accumulatedMs: 0,
+        elapsedMs: 0,
+      });
+    } else if (action === 'pause') {
+      const elapsed = timerElapsed(existing, now);
+      TIMERS.set(ticketId, {
+        ticketId,
+        userId: 17,
+        running: false,
+        startedAt: null,
+        accumulatedMs: elapsed,
+        elapsedMs: elapsed,
+      });
+    } else if (action === 'resume' && !existing?.running) {
+      TIMERS.set(ticketId, {
+        ticketId,
+        userId: 17,
+        running: true,
+        startedAt: now,
+        accumulatedMs: existing?.accumulatedMs ?? Math.max(0, baseMs ?? 0),
+        elapsedMs: 0,
+      });
+    }
+
+    const current = TIMERS.get(ticketId);
+    return current ? { ...current, elapsedMs: timerElapsed(current, now) } : null;
+  },
   fetch_ticket_by_number: ({ ticketId }: any) => {
     const known = [...TICKETS, ...ARCHIVE].find((t) => t.id === ticketId);
     if (known) return known;
@@ -293,8 +361,14 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   show_ticket: () => null,
 };
 
-/** Responses for the REST calls that still go through the HTTP plugin. */
-const HTTP_FIXTURES: Array<[RegExp, unknown]> = [
+/**
+ * Responses for the REST calls that still go through the HTTP plugin.
+ *
+ * A fixture may be a function so it can reflect state the preview has changed
+ * — the player status has to agree with the mock timers, or reopening a ticket
+ * would look broken here in a way it is not in the real app.
+ */
+const HTTP_FIXTURES: Array<[RegExp, unknown | ((url: string) => unknown)]> = [
   [/getTicketData/, {
     status: 'success',
     ticket_data: [
@@ -322,7 +396,32 @@ const HTTP_FIXTURES: Array<[RegExp, unknown]> = [
       { id: 3, ticket_id: 4700, user_id: 17, to_do: 'Monitoring nachziehen', checked: 0, created_at: '' },
     ],
   }],
-  [/getPlayerStatus/, { status: 'success', playerStatus: null }],
+  [/getPlayerStatus/, () => {
+    // The request body is not visible to a URL matcher, and the preview only
+    // ever runs one timer at a time, so any running timer stands for this one.
+    const running = [...TIMERS.values()].find((timer) => timer.running);
+    const paused = [...TIMERS.values()].find((timer) => !timer.running);
+    const active = running ?? paused;
+
+    return {
+      status: 'success',
+      playerStatus: active
+        ? {
+            id: active.ticketId,
+            play_status: running ? 1 : 2,
+            status_id: 13,
+            // Deliberately 0, exactly as the real backend reports it for a
+            // running timer: calculateTotalTime returns 0 until the first
+            // pause, and total_time_raw is overwritten with 0 before it is
+            // returned. This is what the local record exists to survive.
+            total_time: 0,
+            total_time_raw: '0',
+            tmp_description: '',
+            ticket_status_id: 13,
+          }
+        : null,
+    };
+  }],
   [/getTicketMessages/, { status: 'success', messages: [] }],
   [/getUsersMailSettings/, {
     status: 'success',
@@ -466,7 +565,10 @@ async function handleCommand(cmd: string, args: any): Promise<unknown> {
     const match = HTTP_FIXTURES.find(([pattern]) => pattern.test(url));
     if (!match) console.warn('[preview] no fixture for', url);
 
-    const bytes = Array.from(new TextEncoder().encode(JSON.stringify(match ? match[1] : { status: 'success' })));
+    const fixture = match ? match[1] : { status: 'success' };
+    const body = typeof fixture === 'function' ? (fixture as (u: string) => unknown)(url) : fixture;
+
+    const bytes = Array.from(new TextEncoder().encode(JSON.stringify(body)));
     const emit = (window as any).__TAURI_INTERNALS__.runCallback;
 
     // A trailing 0 marks a data chunk; a lone 1 closes the stream.

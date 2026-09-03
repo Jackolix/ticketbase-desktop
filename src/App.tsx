@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { TicketsProvider, useTickets } from "./contexts/TicketsContext";
+import { ShortcutHelp } from "./components/ShortcutHelp";
 import { UpdaterProvider } from "./contexts/UpdaterContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import { CustomLoginForm } from "./components/auth/CustomLoginForm";
@@ -219,7 +220,13 @@ function AppContent() {
   const renderContent = () => {
     // If a ticket is selected, always show the ticket detail view
     if (selectedTicket) {
-      return <TicketDetail ticket={selectedTicket} onBack={handleTicketBack} />;
+      return (
+        <TicketDetail
+          ticket={selectedTicket}
+          onBack={handleTicketBack}
+          onSelectTicket={(next) => handleTicketSelect(next, true)}
+        />
+      );
     }
 
     switch (currentView) {
@@ -283,6 +290,7 @@ function AppContent() {
         onNavigate={handleViewChange}
         onSelectTicket={(ticket) => handleTicketSelect(ticket)}
       />
+      <ShortcutHelp />
       <UpdateNotification />
       <DebugPanel
         isVisible={showDebugPanel && process.env.NODE_ENV === 'development'}

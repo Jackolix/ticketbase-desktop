@@ -26,9 +26,22 @@ import { WindowManager } from '@/lib/windowManager';
 interface FilePreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Used for the title and to decide how to render the contents. */
   filename: string;
-  ticketId: number;
-  onDownload: () => void;
+  /**
+   * The attachment's ticket. Omit when `file` is supplied — a file opened from
+   * disk belongs to no ticket.
+   */
+  ticketId?: number;
+  /**
+   * Contents to show directly, instead of downloading them.
+   *
+   * This is what lets an .eml be opened from the filesystem: the webview reads
+   * the picked file itself, so no filesystem permission is involved.
+   */
+  file?: Blob;
+  /** Omitted for a local file, which the user already has. */
+  onDownload?: () => void;
   isDownloading?: boolean;
 }
 
@@ -96,6 +109,7 @@ export function FilePreviewModal({
   onClose,
   filename,
   ticketId,
+  file,
   onDownload,
   isDownloading,
 }: FilePreviewModalProps) {
@@ -126,7 +140,9 @@ export function FilePreviewModal({
       setShowQuoted(false);
 
       try {
-        const downloaded = await apiClient.downloadAttachment(ticketId, filename);
+        // A local file is already in hand; an attachment has to be fetched.
+        const downloaded =
+          file ?? (await apiClient.downloadAttachment(ticketId ?? 0, filename));
         if (cancelled) return;
         setBlob(downloaded);
 
@@ -168,7 +184,7 @@ export function FilePreviewModal({
       setEmail(null);
       setBlob(null);
     };
-  }, [isOpen, info.previewable, info.kind, ticketId, filename]);
+  }, [isOpen, info.previewable, info.kind, ticketId, filename, file]);
 
   const openExternally = useCallback(async () => {
     if (!blob) return;
@@ -216,13 +232,16 @@ export function FilePreviewModal({
               <ExternalLink className="h-3.5 w-3.5" />
             </IconButton>
           )}
-          <IconButton label="Herunterladen" onClick={onDownload} disabled={isDownloading}>
-            {isDownloading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Download className="h-3.5 w-3.5" />
-            )}
-          </IconButton>
+          {/* A file opened from disk needs no download button. */}
+          {onDownload && (
+            <IconButton label="Herunterladen" onClick={onDownload} disabled={isDownloading}>
+              {isDownloading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
+          )}
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto bg-muted/30">

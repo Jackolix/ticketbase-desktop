@@ -15,7 +15,7 @@ use tauri::State;
 
 use crate::api::client::TicketQueryUser;
 use crate::api::models::{Customer, Ticket, CLOSED_STATUS_ID};
-use crate::store::{BucketCounts, TicketQuery};
+use crate::store::{BucketCounts, TicketQuery, Timer};
 use crate::sync::{Session, SyncEngine, SyncStatus};
 
 pub struct AppState {
@@ -217,6 +217,76 @@ pub async fn fetch_ticket_by_number(
         Err(crate::api::client::ApiError::Parse(_)) => Ok(None),
         Err(err) => Err(err.to_string()),
     }
+}
+
+/// What happened to a timer.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimerAction {
+    /// A fresh session, from zero.
+    Start,
+    /// Continue a paused one — or adopt a running one we have no record of.
+    Resume,
+    Pause,
+    /// The work session ended; forget it.
+    Clear,
+}
+
+/// This client's own record of a running timer.
+///
+/// The backend cannot answer "how long has this been running": `getPlayerStatus`
+/// computes the elapsed seconds and then overwrites the variable with 0 before
+/// returning, and its `total_time` is a rounded billing figure that stays 0
+/// until the first pause. Both windows and both restarts read from here
+/// instead, which is why a reopened ticket no longer starts counting at zero.
+#[tauri::command]
+pub fn timer_status(
+    state: State<'_, AppState>,
+    ticket_id: i64,
+) -> Result<Option<Timer>, String> {
+    let sync = state.sync.clone();
+    let Some(session) = sync.session() else {
+        return Ok(None);
+    };
+
+    sync.store()
+        .timer(ticket_id, session.user.id, now_millis())
+        .map_err(|e| e.to_string())
+}
+
+/// Records a timer transition and returns the resulting snapshot.
+///
+/// `base_ms` is only consulted by `Resume` when there is no local record, to
+/// seed the total from whatever the server could tell us.
+#[tauri::command]
+pub fn timer_record(
+    state: State<'_, AppState>,
+    ticket_id: i64,
+    action: TimerAction,
+    base_ms: Option<i64>,
+) -> Result<Option<Timer>, String> {
+    let sync = state.sync.clone();
+    let Some(session) = sync.session() else {
+        return Ok(None);
+    };
+
+    let user_id = session.user.id;
+    let now = now_millis();
+    let store = sync.store();
+
+    match action {
+        TimerAction::Start => store.timer_start(ticket_id, user_id, now),
+        TimerAction::Resume => {
+            store.timer_resume(ticket_id, user_id, base_ms.unwrap_or(0), now)
+        }
+        TimerAction::Pause => store.timer_pause(ticket_id, user_id, now),
+        TimerAction::Clear => store.timer_clear(ticket_id, user_id),
+    }
+    .map_err(|e| e.to_string())?;
+
+    store
+        .timer(ticket_id, user_id, now)
+        .map_err(|e| e.to_string())
 }
 
 fn now_millis() -> i64 {
