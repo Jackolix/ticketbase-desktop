@@ -34,7 +34,16 @@ function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
   const { setActiveTab, tickets } = useTickets();
   const [currentView, setCurrentView] = useState("dashboard");
-  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  /**
+   * The tickets opened on top of each other.
+   *
+   * A stack rather than one ticket, so that following a related ticket and
+   * then going back returns to the one you came from instead of dumping you
+   * on the list. Opening from the list or the palette starts a new stack;
+   * following a link from inside a ticket pushes onto it.
+   */
+  const [ticketStack, setTicketStack] = useState<Ticket[]>([]);
+  const selectedTicket = ticketStack.length > 0 ? ticketStack[ticketStack.length - 1] : null;
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
@@ -77,19 +86,19 @@ function AppContent() {
       // pool and message count because getTicketById loads fewer relations.
       const ticket = await getTicket(ticketId);
       if (ticket) {
-        setSelectedTicket(ticket);
+        setTicketStack([ticket]);
         setCurrentView("tickets");
       } else {
         console.error('Ticket not found:', ticketId);
         // Fallback to dashboard if ticket not found
         setCurrentView("dashboard");
-        setSelectedTicket(null);
+        setTicketStack([]);
       }
     } catch (error) {
       console.error('Failed to load ticket by ID:', error);
       // Fallback to dashboard if error
       setCurrentView("dashboard");
-      setSelectedTicket(null);
+      setTicketStack([]);
     } finally {
       setIsLoadingTicket(false);
     }
@@ -104,7 +113,7 @@ function AppContent() {
       void loadTicketById(parseInt(ticketMatch[1], 10));
     } else {
       setCurrentView("dashboard");
-      setSelectedTicket(null);
+      setTicketStack([]);
     }
 
     WindowManager.cleanupOldTempFiles();
@@ -130,7 +139,7 @@ function AppContent() {
 
   const handleViewChange = (view: string) => {
     setCurrentView(view);
-    setSelectedTicket(null);
+    setTicketStack([]);
     // Clear URL hash when navigating away from ticket
     if (window.location.hash.startsWith('#/ticket/')) {
       window.location.hash = '';
@@ -157,15 +166,25 @@ function AppContent() {
       }
     }
 
-    setSelectedTicket(ticket);
+    setTicketStack([ticket]);
+    setCurrentView("tickets");
+  };
+
+  /** Follows a link from inside a ticket, keeping the way back. */
+  const handleRelatedSelect = (ticket: Ticket) => {
+    setTicketStack((stack) => {
+      // Re-opening the ticket you are already on would make Back a no-op.
+      if (stack.length > 0 && stack[stack.length - 1].id === ticket.id) return stack;
+      return [...stack, ticket];
+    });
     setCurrentView("tickets");
   };
 
   const handleTicketBack = () => {
-    setSelectedTicket(null);
+    setTicketStack((stack) => stack.slice(0, -1));
     setCurrentView("tickets");
-    // Clear URL hash when going back
-    if (window.location.hash.startsWith('#/ticket/')) {
+    // Only the last step out of the stack leaves ticket routing behind.
+    if (ticketStack.length <= 1 && window.location.hash.startsWith('#/ticket/')) {
       window.location.hash = '';
     }
   };
@@ -222,9 +241,12 @@ function AppContent() {
     if (selectedTicket) {
       return (
         <TicketDetail
+          // Remounts on navigation, so a related ticket does not inherit the
+          // previous one's open tab, scroll offset or loaded history.
+          key={selectedTicket.id}
           ticket={selectedTicket}
           onBack={handleTicketBack}
-          onSelectTicket={(next) => handleTicketSelect(next, true)}
+          onSelectTicket={handleRelatedSelect}
         />
       );
     }

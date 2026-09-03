@@ -50,7 +50,9 @@ import {
 import { searchCustomers, type Customer, type TicketSort } from '@/lib/sync';
 import { useHotkey } from '@/hooks/useHotkey';
 import { ScheduleTicketDialog, TicketRowMenu } from './TicketRowMenu';
-import { TicketHoverPreview, type PreviewAnchor } from './TicketPreviewCard';
+import { TicketHoverPreview } from './TicketPreviewCard';
+import { useTicketPreview } from '@/hooks/useTicketPreview';
+import { shouldVirtualize, virtualWindow } from '@/lib/virtualWindow';
 import type { Ticket } from '@/types/api';
 
 interface TicketBoardProps {
@@ -94,6 +96,7 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
     tickets,
     counts,
     isLoading,
+    isRefreshing,
     filterState,
     updateFilterState,
     clearFilters,
@@ -113,14 +116,21 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
   const [density, setDensity] = useState<Density>(readDensity);
   /** The ticket whose scheduling dialog is open, if any. */
   const [scheduleTarget, setScheduleTarget] = useState<Ticket | null>(null);
-  /** The hover preview: which ticket, and where to put it. */
-  const [preview, setPreview] = useState<{ ticket: Ticket; anchor: PreviewAnchor } | null>(null);
+  const { preview, show: showPreview, hide: hidePreview } = useTicketPreview();
 
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
   /** Where to put the caret after a suggestion rewrote the query. */
   const pendingCaret = useRef<number | null>(null);
-  const hoverTimer = useRef<number | null>(null);
+  /**
+   * Scroll position and viewport height of the active list, for windowing.
+   *
+   * Kept in state rather than read during render so the window recomputes when
+   * the list is scrolled, and only then.
+   */
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
+  /** Measured height of one row; 0 until the first row has been laid out. */
+  const [rowHeight, setRowHeight] = useState(0);
 
   const tokens = DENSITY[density];
   const activeTab = (navigationState.activeTab ?? 'my') as BoardTab;
@@ -313,57 +323,55 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
     setCaret(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
   }, []);
 
-  const hidePreview = useCallback(() => {
-    if (hoverTimer.current !== null) {
-      window.clearTimeout(hoverTimer.current);
-      hoverTimer.current = null;
-    }
-    setPreview((current) => (current === null ? current : null));
-  }, []);
+  // Switching tabs must not strand a card on screen with no row under it.
+  useEffect(() => hidePreview, [activeTab, rows, hidePreview]);
 
   /**
-   * Opens the preview after a pause.
+   * Measures one row so the spacers can stand in for the rest.
    *
-   * The delay is what keeps this from being unusable: without it, dragging the
-   * pointer down a list of forty rows flashes forty cards. The anchor is taken
-   * once, on entry, rather than tracking the mouse — a card that follows the
-   * cursor is harder to read than one that stays put.
+   * Re-measured whenever the density changes, since that is what row height
+   * depends on. Rows are uniform within a density — two lines of text, always
+   * — so one measurement describes them all.
    */
-  const showPreview = useCallback(
-    (ticket: Ticket, event: React.MouseEvent<HTMLTableRowElement>) => {
-      if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
+  const measureRow = useCallback((el: HTMLTableRowElement | null) => {
+    if (!el) return;
+    const height = el.getBoundingClientRect().height;
+    if (height > 0) setRowHeight((current) => (current === height ? current : height));
+  }, []);
 
-      const rect = event.currentTarget.getBoundingClientRect();
-      const anchor: PreviewAnchor = { x: event.clientX, top: rect.top, bottom: rect.bottom };
+  useEffect(() => setRowHeight(0), [density]);
 
-      hoverTimer.current = window.setTimeout(() => {
-        hoverTimer.current = null;
-        setPreview({ ticket, anchor });
-      }, HOVER_DELAY_MS);
-    },
-    [],
-  );
-
-  // The anchor is a viewport position, so it goes stale the moment anything
-  // moves underneath it.
+  // Track the viewport of whichever list is showing.
   useEffect(() => {
-    if (!preview) return;
-    window.addEventListener('wheel', hidePreview, { passive: true });
-    window.addEventListener('resize', hidePreview);
-    return () => {
-      window.removeEventListener('wheel', hidePreview);
-      window.removeEventListener('resize', hidePreview);
-    };
-  }, [preview, hidePreview]);
+    const container = scrollRefs.current[activeTab];
+    if (!container) return;
 
-  // Leaving the board entirely — switching tabs, unmounting — must not strand
-  // a card on screen with no row under it.
-  useEffect(() => hidePreview, [activeTab, rows, hidePreview]);
+    setViewport({ scrollTop: container.scrollTop, height: container.clientHeight });
+
+    const observer = new ResizeObserver(() => {
+      setViewport((current) => ({ ...current, height: container.clientHeight }));
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [activeTab, isLoading]);
+
+  const windowed = useMemo(
+    () =>
+      virtualWindow({
+        count: rows.length,
+        rowHeight,
+        scrollTop: viewport.scrollTop,
+        viewportHeight: viewport.height,
+      }),
+    [rows.length, rowHeight, viewport.scrollTop, viewport.height],
+  );
 
   const handleScroll = useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
       hidePreview();
-      setScrollPosition(activeTab, event.currentTarget.scrollTop);
+      const { scrollTop, clientHeight } = event.currentTarget;
+      setViewport({ scrollTop, height: clientHeight });
+      setScrollPosition(activeTab, scrollTop);
     },
     [activeTab, setScrollPosition, hidePreview],
   );
@@ -607,7 +615,15 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((ticket) => (
+              {/* Spacers stand in for the rows outside the window, so the
+                  scrollbar reflects the whole list. */}
+              {windowed.padTop > 0 && (
+                <tr aria-hidden style={{ height: windowed.padTop }}>
+                  <td colSpan={7} className="p-0" />
+                </tr>
+              )}
+
+              {rows.slice(windowed.start, windowed.end).map((ticket, index) => (
                 <TicketRowMenu
                   key={ticket.id}
                   ticket={ticket}
@@ -615,6 +631,7 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
                   onSchedule={() => setScheduleTarget(ticket)}
                 >
                   <TicketRow
+                    ref={index === 0 ? measureRow : undefined}
                     ticket={ticket}
                     tokens={tokens}
                     onSelect={() => onTicketSelect(ticket, true)}
@@ -624,6 +641,12 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
                   />
                 </TicketRowMenu>
               ))}
+
+              {windowed.padBottom > 0 && (
+                <tr aria-hidden style={{ height: windowed.padBottom }}>
+                  <td colSpan={7} className="p-0" />
+                </tr>
+              )}
             </tbody>
           </table>
         )}
@@ -632,7 +655,16 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
       <p className="text-xs text-muted-foreground">
         {rows.length} {rows.length === 1 ? 'Ticket' : 'Tickets'}
         {hasQuery ? ' gefunden' : ''}
+        {shouldVirtualize(rows.length) && ' · nur sichtbare werden gezeichnet'}
         {isLookingUpNumber && ' · Ticketnummer wird beim Server angefragt …'}
+        {/* The list stays on screen while this runs; the hint is here so a slow
+            query is visible without the rows flashing away. */}
+        {isRefreshing && !isLoading && (
+          <span className="ml-1 inline-flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            wird aktualisiert …
+          </span>
+        )}
       </p>
 
       {preview && <TicketHoverPreview ticket={preview.ticket} anchor={preview.anchor} />}
@@ -642,9 +674,6 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
     </div>
   );
 }
-
-/** How long the pointer has to rest on a row before its preview opens. */
-const HOVER_DELAY_MS = 450;
 
 interface Suggestion {
   key: string;

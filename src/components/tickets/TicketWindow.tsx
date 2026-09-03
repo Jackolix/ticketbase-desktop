@@ -13,7 +13,9 @@ interface TicketWindowProps {
 
 export function TicketWindow({ ticketId }: TicketWindowProps) {
   const { isAuthenticated, isLoading } = useAuth();
-  const [ticket, setTicket] = useState<Ticket | null>(null);
+  /** Same back stack as the main window; see App.tsx. */
+  const [ticketStack, setTicketStack] = useState<Ticket[]>([]);
+  const ticket = ticketStack.length > 0 ? ticketStack[ticketStack.length - 1] : null;
   const [isLoadingTicket, setIsLoadingTicket] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,7 +28,7 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
     try {
       const loaded = await getTicket(parseInt(ticketId, 10));
       if (loaded) {
-        setTicket(loaded);
+        setTicketStack([loaded]);
       } else {
         setError('Ticket not found');
       }
@@ -101,12 +103,18 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
     );
   }
 
-  // Ticket windows close themselves instead of navigating back.
+  // Back steps out of a followed ticket first, and only closes the window once
+  // there is nothing left to go back to.
   //
-  // This must go through Tauri rather than the DOM's window.close(), which does
-  // not route through the window system at all and is a no-op on WKWebView and
-  // WebKitGTK.
+  // Closing must go through Tauri rather than the DOM's window.close(), which
+  // does not route through the window system at all and is a no-op on
+  // WKWebView and WebKitGTK.
   const handleBack = () => {
+    if (ticketStack.length > 1) {
+      setTicketStack((stack) => stack.slice(0, -1));
+      return;
+    }
+
     getCurrentWindow().close().catch((err) => {
       console.error('Failed to close ticket window:', err);
     });
@@ -121,9 +129,16 @@ export function TicketWindow({ ticketId }: TicketWindowProps) {
               spawning another window, which is what a back button would
               have to undo anyway. */}
           <TicketDetail
+            key={ticket.id}
             ticket={ticket}
             onBack={handleBack}
-            onSelectTicket={setTicket}
+            onSelectTicket={(next) =>
+              setTicketStack((stack) =>
+                stack.length > 0 && stack[stack.length - 1].id === next.id
+                  ? stack
+                  : [...stack, next],
+              )
+            }
             variant="window"
           />
         </ErrorBoundary>

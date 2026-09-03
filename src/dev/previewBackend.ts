@@ -128,7 +128,19 @@ function makeTicket(i: number) {
   };
 }
 
-const TICKETS = Array.from({ length: 24 }, (_, i) => makeTicket(i));
+/**
+ * How many tickets the preview holds.
+ *
+ * `?preview=1&tickets=800` stands in for a real installation, where "Alle" and
+ * the archive run to hundreds of rows — the size at which list rendering, not
+ * fixtures, is what you want to be looking at.
+ */
+const TICKET_COUNT = Math.min(
+  5000,
+  Number(new URLSearchParams(window.location.search).get('tickets')) || 24,
+);
+
+const TICKETS = Array.from({ length: TICKET_COUNT }, (_, i) => makeTicket(i));
 
 const MINE = TICKETS.filter((t) => t.my_ticket_id !== 0);
 const POOL = TICKETS.filter((t) => t.my_ticket_id === 0);

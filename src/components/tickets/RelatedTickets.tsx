@@ -11,6 +11,8 @@ import type { Ticket } from '@/types/api';
 import { TONE_BADGE, statusTone } from '@/lib/ticketStatus';
 import { CLOSED_STATUS_ID } from '@/lib/ticketStatusOptions';
 import { findSimilarTickets, topKeywords, type SimilarTicket } from '@/lib/ticketSimilarity';
+import { TicketHoverPreview } from './TicketPreviewCard';
+import { useTicketPreview } from '@/hooks/useTicketPreview';
 
 /** How many of the customer's other tickets to list. */
 const HISTORY_LIMIT = 8;
@@ -51,6 +53,9 @@ export function RelatedTickets({ ticket, onSelect }: RelatedTicketsProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isFetchingArchive, setIsFetchingArchive] = useState(false);
   const [archiveLoaded, setArchiveLoaded] = useState(false);
+  // Same hover preview as the board: deciding whether a past ticket is the one
+  // you remember should not require opening it either.
+  const { preview, show: showPreview, hide: hidePreview } = useTicketPreview();
 
   const companyId = ticket.company?.id ?? 0;
 
@@ -136,6 +141,8 @@ export function RelatedTickets({ ticket, onSelect }: RelatedTicketsProps) {
                     key={match.ticket.id}
                     ticket={match.ticket}
                     onSelect={onSelect}
+                    onHoverStart={showPreview}
+                    onHoverEnd={hidePreview}
                     footnote={match.shared.slice(0, 3).join(' · ')}
                   />
                 ))}
@@ -159,7 +166,13 @@ export function RelatedTickets({ ticket, onSelect }: RelatedTicketsProps) {
                 history
                   .slice(0, HISTORY_LIMIT)
                   .map((candidate) => (
-                    <Row key={candidate.id} ticket={candidate} onSelect={onSelect} />
+                    <Row
+                      key={candidate.id}
+                      ticket={candidate}
+                      onSelect={onSelect}
+                      onHoverStart={showPreview}
+                      onHoverEnd={hidePreview}
+                    />
                   ))
               )}
             </Section>
@@ -189,6 +202,8 @@ export function RelatedTickets({ ticket, onSelect }: RelatedTicketsProps) {
           </>
         )}
       </CardContent>
+
+      {preview && <TicketHoverPreview ticket={preview.ticket} anchor={preview.anchor} />}
     </Card>
   );
 }
@@ -221,10 +236,14 @@ function Section({
 function Row({
   ticket,
   onSelect,
+  onHoverStart,
+  onHoverEnd,
   footnote,
 }: {
   ticket: Ticket;
   onSelect?: (ticket: Ticket) => void;
+  onHoverStart: (ticket: Ticket, event: React.MouseEvent<HTMLElement>) => void;
+  onHoverEnd: () => void;
   footnote?: string;
 }) {
   const age = formatTicketAge(ticket.created_at);
@@ -234,6 +253,8 @@ function Row({
       type="button"
       disabled={!onSelect}
       onClick={() => onSelect?.(ticket)}
+      onMouseEnter={(event) => onHoverStart(ticket, event)}
+      onMouseLeave={onHoverEnd}
       className="w-full rounded px-1.5 py-1 text-left transition-colors enabled:hover:bg-accent disabled:cursor-default"
     >
       <div className="flex items-baseline gap-1.5">

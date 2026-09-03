@@ -86,6 +86,13 @@ interface TicketsContextType {
   /** Unfiltered totals, for tab badges. */
   counts: BucketCounts;
   isLoading: boolean;
+  /**
+   * A query is in flight over rows that are already on screen — a sync
+   * landing, or the search changing. Distinct from `isLoading`, which means
+   * there is nothing to show yet: replacing a good list with a skeleton on
+   * every refresh would flash once every thirty seconds.
+   */
+  isRefreshing: boolean;
   /** Null until the first status arrives. */
   syncStatus: SyncStatus | null;
   /** Asks the sync engine for an immediate pull. */
@@ -159,6 +166,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   const [tickets, setTickets] = useState<TicketBuckets>(emptyBuckets);
   const [counts, setCounts] = useState<BucketCounts>(emptyCounts);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [archiveState, setArchiveState] = useState<ArchiveState>(idleArchive);
   const [isLookingUpNumber, setIsLookingUpNumber] = useState(false);
@@ -186,6 +194,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
 
   const loadFromStore = useCallback(async () => {
     const token = ++queryToken.current;
+    setIsRefreshing(true);
     try {
       const [newTickets, myTickets, allTickets, archiveTickets, nextCounts] = await Promise.all([
         queryTickets({ ...baseQuery, bucket: 'new' }),
@@ -208,7 +217,10 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Failed to read tickets from the local store:', error);
     } finally {
-      if (token === queryToken.current) setIsLoading(false);
+      if (token === queryToken.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [baseQuery]);
 
@@ -387,6 +399,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
       tickets,
       counts,
       isLoading,
+      isRefreshing,
       syncStatus,
       refreshTickets,
       filterState,
@@ -403,6 +416,7 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
       tickets,
       counts,
       isLoading,
+      isRefreshing,
       syncStatus,
       refreshTickets,
       filterState,
