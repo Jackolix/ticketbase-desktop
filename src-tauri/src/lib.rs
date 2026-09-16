@@ -84,6 +84,21 @@ async fn show_ticket(app: tauri::AppHandle, ticket_id: u32) -> Result<(), String
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must come first: the callback runs in the already-running instance
+        // when Windows search, a shortcut or the taskbar launches the app a
+        // second time. Raising the existing window is what the user meant by
+        // "open Ticketbase"; a second process would poll and notify twice.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // The main window can be closed while ticket windows keep the app
+            // alive, so fall back to any window rather than doing nothing
+            // visible and looking like the launch was ignored.
+            let window = app
+                .get_webview_window("main")
+                .or_else(|| app.webview_windows().into_values().next());
+            if let Some(window) = window {
+                let _ = bring_to_front(&window);
+            }
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
