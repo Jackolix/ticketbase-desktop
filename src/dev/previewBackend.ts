@@ -12,6 +12,9 @@
 
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 
+import { makeSampleScreenshot } from './sampleImage';
+import { makeSamplePdf } from './samplePdf';
+
 const COMPANIES = [
   { id: 8, name: 'Müller Logistik GmbH', number: 'K-1042' },
   { id: 12, name: 'Stadtwerke Bergheim', number: 'K-2210' },
@@ -80,7 +83,7 @@ function makeTicket(i: number) {
     ticketTerminatedUser: '',
     pool_name: i % 3 === 0 ? 'Nord' : 'Süd',
     playStatus: i === 0 ? 1 : i === 3 ? 2 : null,
-    attachments: i % 4 === 0 ? ['screenshot.png'] : [],
+    attachments: i % 4 === 0 ? ['screenshot.png', 'Angebot_2026-0417.pdf'] : [],
     my_ticket_id: i % 7 === 0 ? 0 : 17,
     location_id: 42,
     dyn_template_id: 0,
@@ -451,6 +454,13 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
  * would look broken here in a way it is not in the real app.
  */
 const HTTP_FIXTURES: Array<[RegExp, unknown | ((url: string) => unknown)]> = [
+  // Attachment downloads, chosen by the filename in the request body. Returning
+  // bytes rather than JSON is what lets the file preview be reviewed here.
+  [/getDataUrl/, async (_url: string, body: string) =>
+    body.includes('.pdf')
+      ? makeSamplePdf()
+      : makeSampleScreenshot(),
+  ],
   [/getTicketData/, {
     status: 'success',
     ticket_data: [
@@ -621,8 +631,22 @@ export function installPreviewBackend() {
   );
 }
 
-const pendingRequests = new Map<number, string>();
+/**
+ * The url and request body of a request in flight.
+ *
+ * The body matters because the REST API puts the interesting part of an
+ * attachment request — which file is wanted — in the POST body rather than the
+ * url, so a fixture keyed only on the url could not tell them apart.
+ */
+const pendingRequests = new Map<number, { url: string; body: string }>();
 let nextRid = 1;
+
+/** The plugin hands the body over as bytes; fixtures want to read it. */
+function decodeBody(data: unknown): string {
+  if (typeof data === 'string') return data;
+  if (Array.isArray(data)) return new TextDecoder().decode(new Uint8Array(data));
+  return '';
+}
 
 async function handleCommand(cmd: string, args: any): Promise<unknown> {
   // The HTTP plugin is a three-step protocol: open a request, send it, then
@@ -630,27 +654,38 @@ async function handleCommand(cmd: string, args: any): Promise<unknown> {
   // unchanged.
   if (cmd === 'plugin:http|fetch') {
     const rid = nextRid++;
-    pendingRequests.set(rid, String(args?.clientConfig?.url ?? ''));
+    pendingRequests.set(rid, {
+      url: String(args?.clientConfig?.url ?? ''),
+      body: decodeBody(args?.clientConfig?.data),
+    });
     return rid;
   }
   if (cmd === 'plugin:http|fetch_send') {
-    const url = pendingRequests.get(args?.rid) ?? '';
+    const request = pendingRequests.get(args?.rid) ?? { url: '', body: '' };
     pendingRequests.delete(args?.rid);
     const responseRid = nextRid++;
-    pendingRequests.set(responseRid, url);
-    return { status: 200, statusText: 'OK', url, headers: {}, rid: responseRid };
+    pendingRequests.set(responseRid, request);
+    return { status: 200, statusText: 'OK', url: request.url, headers: {}, rid: responseRid };
   }
   if (cmd === 'plugin:http|fetch_read_body') {
-    const url = pendingRequests.get(args?.rid) ?? '';
+    const request = pendingRequests.get(args?.rid) ?? { url: '', body: '' };
     pendingRequests.delete(args?.rid);
+    const { url } = request;
 
     const match = HTTP_FIXTURES.find(([pattern]) => pattern.test(url));
     if (!match) console.warn('[preview] no fixture for', url);
 
     const fixture = match ? match[1] : { status: 'success' };
-    const body = typeof fixture === 'function' ? (fixture as (u: string) => unknown)(url) : fixture;
+    const body =
+      typeof fixture === 'function'
+        ? await (fixture as (u: string, b: string) => unknown)(url, request.body)
+        : fixture;
 
-    const bytes = Array.from(new TextEncoder().encode(JSON.stringify(body)));
+    // A fixture that already produced bytes is sent as-is; everything else is
+    // the JSON the REST API would have returned.
+    const bytes = Array.from(
+      body instanceof Uint8Array ? body : new TextEncoder().encode(JSON.stringify(body)),
+    );
     const emit = (window as any).__TAURI_INTERNALS__.runCallback;
 
     // A trailing 0 marks a data chunk; a lone 1 closes the stream.

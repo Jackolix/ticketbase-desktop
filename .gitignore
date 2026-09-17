@@ -25,3 +25,6 @@ dist-ssr
 
 # Local copy of the Laravel backend (read-only reference, not part of this app)
 ticketsystem-backend/
+
+# Staged from node_modules by scripts/copy-pdfjs-assets.js
+public/pdfjs/

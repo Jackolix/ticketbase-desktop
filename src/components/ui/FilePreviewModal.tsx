@@ -19,8 +19,11 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { PdfView } from '@/components/ui/PdfView';
+import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, ZoomPane } from '@/components/ui/ZoomPane';
 import { apiClient } from '@/lib/api';
 import { parseEml, type EmlAttachment, type ParsedEmail } from '@/lib/emlParser';
+import { warmPdfjs } from '@/lib/pdf';
 import { normalizeTicketText, splitQuotedReply } from '@/lib/richText';
 import { WindowManager } from '@/lib/windowManager';
 
@@ -126,6 +129,11 @@ export function FilePreviewModal({
   const [zoom, setZoom] = useState(100);
   const [rotation, setRotation] = useState(0);
   const [showQuoted, setShowQuoted] = useState(false);
+  /** Where the reader is in a PDF, for the toolbar. */
+  const [pdfPages, setPdfPages] = useState(0);
+  const [pdfPage, setPdfPage] = useState(1);
+  /** An image's own pixel size, which is what the zoom is a percentage of. */
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   /** An attachment of the opened email, shown in a preview stacked on this one. */
   const [innerAttachment, setInnerAttachment] = useState<{ name: string; blob: Blob } | null>(
     null,
@@ -144,6 +152,14 @@ export function FilePreviewModal({
       setRotation(0);
       setShowQuoted(false);
       setInnerAttachment(null);
+      setPdfPages(0);
+      setPdfPage(1);
+      setImageSize(null);
+
+      // The parser and its worker are a bigger download than most attachments
+      // and do not depend on one, so they are started here rather than after
+      // the file has arrived.
+      if (info.kind === 'pdf') warmPdfjs();
 
       try {
         // A local file is already in hand; an attachment has to be fetched.
@@ -167,7 +183,9 @@ export function FilePreviewModal({
           const raw = await downloaded.text();
           if (cancelled) return;
           setTextContent(raw);
-        } else {
+        } else if (info.kind !== 'pdf') {
+          // A PDF is drawn from its bytes by `PdfView`; handing the webview a
+          // blob URL is what it cannot be trusted with.
           url = URL.createObjectURL(downloaded);
           setObjectUrl(url);
         }
@@ -223,15 +241,28 @@ export function FilePreviewModal({
             {info.label}
           </Badge>
 
-          {info.kind === 'image' && objectUrl && (
+          {/* A PDF gets the same controls as an image: scans arrive sideways
+              often enough that rotation earns its place there too. */}
+          {((info.kind === 'image' && objectUrl) || (info.kind === 'pdf' && blob)) && (
             <div className="flex shrink-0 items-center gap-0.5">
-              <IconButton label="Verkleinern" onClick={() => setZoom((z) => Math.max(25, z - 25))}>
+              {pdfPages > 1 && (
+                <span className="mr-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {pdfPage} / {pdfPages}
+                </span>
+              )}
+              <IconButton
+                label="Verkleinern"
+                onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z - ZOOM_STEP))}
+              >
                 <Minus className="h-3.5 w-3.5" />
               </IconButton>
               <span className="w-10 text-center font-mono text-[11px] tabular-nums text-muted-foreground">
                 {zoom}%
               </span>
-              <IconButton label="Vergrößern" onClick={() => setZoom((z) => Math.min(400, z + 25))}>
+              <IconButton
+                label="Vergrößern"
+                onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + ZOOM_STEP))}
+              >
                 <Plus className="h-3.5 w-3.5" />
               </IconButton>
               <IconButton label="Drehen" onClick={() => setRotation((r) => (r + 90) % 360)}>
@@ -260,7 +291,14 @@ export function FilePreviewModal({
           </IconButton>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto bg-muted/30">
+        {/* The zoomable viewers scroll themselves, so that they can also be
+            panned by dragging and can hold their place while zooming;
+            everything else is scrolled by this wrapper as before. */}
+        <div
+          className={`min-h-0 flex-1 bg-muted/30 ${
+            info.kind === 'pdf' || info.kind === 'image' ? 'overflow-hidden' : 'overflow-auto'
+          }`}
+        >
           {isLoading ? (
             <Centered>
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -309,16 +347,60 @@ export function FilePreviewModal({
               {textContent}
             </pre>
           ) : objectUrl && info.kind === 'image' ? (
-            <div className="flex min-h-full items-center justify-center p-4">
-              <img
-                src={objectUrl}
-                alt={filename}
-                style={{ transform: `scale(${zoom / 100}) rotate(${rotation}deg)` }}
-                className="max-h-full max-w-full object-contain transition-transform"
-              />
-            </div>
-          ) : objectUrl && info.kind === 'pdf' ? (
-            <iframe src={objectUrl} title={filename} className="h-full w-full border-0" />
+            // Sized rather than transformed: a scaled-up transform does not
+            // grow the scrollable area, so the parts pushed off the top and
+            // left could never be scrolled back to.
+            <ZoomPane
+              naturalWidth={imageSize?.width ?? 0}
+              naturalHeight={imageSize?.height ?? 0}
+              fit="contain"
+              zoom={zoom}
+              rotation={rotation}
+              onZoomChange={setZoom}
+            >
+              {(scale) => (
+                <img
+                  src={objectUrl}
+                  alt={filename}
+                  onLoad={(event) =>
+                    setImageSize({
+                      width: event.currentTarget.naturalWidth,
+                      height: event.currentTarget.naturalHeight,
+                    })
+                  }
+                  draggable={false}
+                  style={
+                    imageSize
+                      ? {
+                          width: imageSize.width * scale,
+                          height: imageSize.height * scale,
+                          // Tailwind's preflight caps every image at the width
+                          // of its container, which would undo the zoom.
+                          maxWidth: 'none',
+                          maxHeight: 'none',
+                          transform: `rotate(${rotation}deg)`,
+                        }
+                      : undefined
+                  }
+                  // The `max-*` caps only apply before the natural size is
+                  // known: once it is, they would clamp the zoomed size back
+                  // to the pane and there would be nothing to scroll.
+                  className={`shrink-0 select-none ${
+                    imageSize ? '' : 'max-h-full max-w-full object-contain'
+                  }`}
+                />
+              )}
+            </ZoomPane>
+          ) : blob && info.kind === 'pdf' ? (
+            <PdfView
+              blob={blob}
+              zoom={zoom}
+              rotation={rotation}
+              onZoomChange={setZoom}
+              onLoad={setPdfPages}
+              onPageChange={setPdfPage}
+              onError={setError}
+            />
           ) : objectUrl && info.kind === 'video' ? (
             <div className="flex min-h-full items-center justify-center p-4">
               <video src={objectUrl} controls className="max-h-full max-w-full" />
