@@ -182,6 +182,31 @@ impl ApiClient {
             .ok_or_else(|| ApiError::Parse(format!("could not read ticket {ticket_id}")))
     }
 
+    /// Every message on one ticket, oldest first.
+    ///
+    /// Only called for tickets whose `ticketMessagesCount` went up during a
+    /// sync, so it costs one request per ticket that actually changed rather
+    /// than one per ticket per poll. `user_id` is deliberately not sent: the
+    /// old controller marks messages addressed to that user as read, and a
+    /// background check must not clear the "unread" state the web UI shows.
+    pub async fn get_ticket_messages(
+        &self,
+        token: &str,
+        ticket_id: i64,
+    ) -> Result<Vec<TicketMessage>, ApiError> {
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            #[serde(default)]
+            messages: Vec<serde_json::Value>,
+        }
+
+        let envelope: Envelope = self
+            .get_json(token, &format!("/getTicketMessages?ticket_id={ticket_id}"))
+            .await?;
+
+        Ok(envelope.messages.iter().map(parse_ticket_message).collect())
+    }
+
     /// The full customer list.
     ///
     /// Small enough to cache whole and refresh rarely, which is what makes
@@ -250,6 +275,45 @@ fn raw_str(raw: &serde_json::Value, path: &[&str]) -> String {
         serde_json::Value::String(v) => v.clone(),
         serde_json::Value::Number(n) => n.to_string(),
         _ => String::new(),
+    }
+}
+
+/// One ticket message, as much of it as the notifier needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TicketMessage {
+    pub id: i64,
+    /// Who wrote it; 0 when the backend did not say.
+    pub from_user_id: i64,
+    pub from_name: String,
+    pub text: String,
+    pub created_at: String,
+}
+
+/// Reads one row of `getTicketMessages`.
+///
+/// The controller returns raw `TicketMessage` models with `fromUser` eager
+/// loaded, which Laravel serialises as `from_user`. Older shapes used
+/// `user_id`/`user`, so both are accepted.
+pub fn parse_ticket_message(raw: &serde_json::Value) -> TicketMessage {
+    let from_user_id = match raw_i64(raw, "user_id_from") {
+        0 => raw_i64(raw, "user_id"),
+        id => id,
+    };
+    let from_name = [
+        raw_str(raw, &["from_user", "name"]),
+        raw_str(raw, &["fromUser", "name"]),
+        raw_str(raw, &["user", "name"]),
+    ]
+    .into_iter()
+    .find(|s| !s.trim().is_empty())
+    .unwrap_or_default();
+
+    TicketMessage {
+        id: raw_i64(raw, "id"),
+        from_user_id,
+        from_name,
+        text: raw_str(raw, &["message"]),
+        created_at: raw_str(raw, &["created_at"]),
     }
 }
 
@@ -434,6 +498,32 @@ pub fn parse_ticket_by_id(raw: &serde_json::Value) -> Option<Ticket> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_a_message_in_the_shape_get_ticket_messages_returns() {
+        let raw = serde_json::json!({
+            "id": 9,
+            "ticket_id": 4812,
+            "user_id_from": "7",
+            "user_id_to": 1,
+            "message": "Drucker geht wieder nicht",
+            "created_at": "2026-11-19 09:12:00",
+            "from_user": { "id": 7, "name": "Anna Weber" }
+        });
+        let m = parse_ticket_message(&raw);
+        assert_eq!(m.id, 9);
+        assert_eq!(m.from_user_id, 7);
+        assert_eq!(m.from_name, "Anna Weber");
+        assert_eq!(m.text, "Drucker geht wieder nicht");
+    }
+
+    #[test]
+    fn reads_the_older_message_shape() {
+        let raw = serde_json::json!({ "id": 1, "user_id": 3, "message": "x", "user": { "name": "Jonas" } });
+        let m = parse_ticket_message(&raw);
+        assert_eq!(m.from_user_id, 3);
+        assert_eq!(m.from_name, "Jonas");
+    }
 
     #[test]
     fn recovers_attachments_that_the_old_transform_dropped() {

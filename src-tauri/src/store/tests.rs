@@ -795,3 +795,114 @@ fn the_template_form_survives_a_round_trip_and_a_single_ticket_fetch() {
     store.put_ticket(&ticket(1, "offen"), 2, false).unwrap();
     assert_eq!(store.get_ticket(1).unwrap().unwrap().form, Some(form));
 }
+
+fn with_messages(id: i64, count: i64) -> Ticket {
+    Ticket {
+        ticket_messages_count: count,
+        ..ticket(id, "x")
+    }
+}
+
+#[test]
+fn reports_my_tickets_whose_message_count_went_up() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_all(&[], &[with_messages(1, 2), with_messages(2, 5)], &[], 1)
+        .unwrap();
+
+    let diff = store
+        .replace_all(&[], &[with_messages(1, 4), with_messages(2, 5)], &[], 2)
+        .unwrap();
+
+    assert_eq!(
+        diff.message_bumps,
+        vec![MessageBump { ticket_id: 1, previous: 2, current: 4 }]
+    );
+}
+
+#[test]
+fn message_bumps_skip_the_first_sync_and_other_peoples_tickets() {
+    let store = Store::open_in_memory().unwrap();
+    let first = store
+        .replace_all(&[], &[with_messages(1, 3)], &[], 1)
+        .unwrap();
+    assert!(first.message_bumps.is_empty());
+
+    // Ticket 2 is only in the shared pool; ticket 3 is new to the user, so
+    // its existing messages are not news either.
+    store
+        .replace_all(&[with_messages(2, 1)], &[with_messages(1, 3)], &[], 2)
+        .unwrap();
+    let diff = store
+        .replace_all(
+            &[with_messages(2, 9)],
+            &[with_messages(1, 3), with_messages(3, 7)],
+            &[],
+            3,
+        )
+        .unwrap();
+
+    assert!(diff.message_bumps.is_empty());
+}
+
+#[test]
+fn a_ticket_cached_outside_the_sync_does_not_count_as_a_bump() {
+    let store = Store::open_in_memory().unwrap();
+    store.replace_all(&[], &[with_messages(1, 0)], &[], 1).unwrap();
+    // getTicketById carries no message count.
+    store.put_ticket(&with_messages(2, 0), 1, true).unwrap();
+
+    let diff = store
+        .replace_all(&[], &[with_messages(1, 0), with_messages(2, 6)], &[], 2)
+        .unwrap();
+
+    assert!(diff.message_bumps.is_empty());
+}
+
+fn hub(kind: &str, ticket_id: Option<i64>) -> NewHubNotification {
+    NewHubNotification {
+        kind: kind.into(),
+        ticket_id,
+        title: "t".into(),
+        body: "b".into(),
+    }
+}
+
+#[test]
+fn notifications_list_newest_first_and_mark_read() {
+    let store = Store::open_in_memory().unwrap();
+    store.add_notification(&hub("message", Some(1)), 10).unwrap();
+    store.add_notification(&hub("message", Some(2)), 20).unwrap();
+    store.add_notification(&hub("assigned", Some(1)), 30).unwrap();
+
+    let all = store.notifications(10).unwrap();
+    assert_eq!(all.iter().map(|n| n.created_at).collect::<Vec<_>>(), vec![30, 20, 10]);
+    assert!(all.iter().all(|n| !n.read));
+
+    assert_eq!(store.mark_notifications_read(None, Some(1)).unwrap(), 2);
+    let unread: Vec<_> = store
+        .notifications(10)
+        .unwrap()
+        .into_iter()
+        .filter(|n| !n.read)
+        .map(|n| n.ticket_id)
+        .collect();
+    assert_eq!(unread, vec![Some(2)]);
+
+    assert_eq!(store.mark_notifications_read(None, None).unwrap(), 1);
+    assert_eq!(store.mark_notifications_read(None, None).unwrap(), 0);
+}
+
+#[test]
+fn notifications_are_capped_and_cleared_with_the_session() {
+    let store = Store::open_in_memory().unwrap();
+    for i in 0..(NOTIFICATIONS_KEPT + 5) {
+        store.add_notification(&hub("new-ticket", Some(i)), i).unwrap();
+    }
+    let kept = store.notifications(1000).unwrap();
+    assert_eq!(kept.len() as i64, NOTIFICATIONS_KEPT);
+    assert_eq!(kept.last().unwrap().created_at, 5);
+
+    store.clear().unwrap();
+    assert!(store.notifications(10).unwrap().is_empty());
+}

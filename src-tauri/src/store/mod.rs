@@ -21,6 +21,7 @@
 //! This table is the client's own record, and living here rather than in a
 //! window means every window agrees on it.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -136,6 +137,18 @@ impl Store {
                 updated_at     INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (ticket_id, user_id)
             );
+
+            CREATE TABLE IF NOT EXISTS notifications (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind       TEXT NOT NULL,
+                ticket_id  INTEGER,
+                title      TEXT NOT NULL,
+                body       TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                read       INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at);
             "#,
         )?;
 
@@ -174,6 +187,21 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM tickets", [], |r| r.get::<_, i64>(0))?
             == 0;
 
+        // Message counts as of the previous pull, for tickets that came from a
+        // pull. Rows cached any other way (getTicketById, the archive) carry a
+        // count of 0 because those endpoints do not load messages, so comparing
+        // against them would announce every existing message as new.
+        let previous_counts: HashMap<i64, i64> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, ticket_messages_count FROM tickets \
+                 WHERE id IN (SELECT ticket_id FROM ticket_buckets)",
+            )?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<Result<HashMap<_, _>, _>>()?;
+            rows
+        };
+
         tx.execute("DELETE FROM ticket_buckets", [])?;
 
         for (bucket, tickets) in [
@@ -207,7 +235,26 @@ impl Store {
 
         tx.commit()?;
 
+        // Only the user's own tickets: a message on someone else's ticket in
+        // the shared pool is not theirs to answer.
+        let message_bumps = if is_first_sync {
+            Vec::new()
+        } else {
+            my_tickets
+                .iter()
+                .filter_map(|t| {
+                    let previous = *previous_counts.get(&t.id)?;
+                    (t.ticket_messages_count > previous).then_some(MessageBump {
+                        ticket_id: t.id,
+                        previous,
+                        current: t.ticket_messages_count,
+                    })
+                })
+                .collect()
+        };
+
         Ok(SyncDiff {
+            message_bumps,
             // On the very first sync everything is "new"; reporting that would
             // notify about the entire backlog.
             newly_in_pool: if is_first_sync {
@@ -611,8 +658,91 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch(
             "DELETE FROM ticket_buckets; DELETE FROM tickets; \
-             DELETE FROM companies; DELETE FROM timers; DELETE FROM meta;",
+             DELETE FROM companies; DELETE FROM timers; DELETE FROM meta; \
+             DELETE FROM notifications;",
         )?;
+        Ok(())
+    }
+
+    /// Records a hub entry and returns it, trimming the oldest beyond the cap.
+    pub fn add_notification(
+        &self,
+        n: &NewHubNotification,
+        now: i64,
+    ) -> Result<HubNotification, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            "INSERT INTO notifications (kind, ticket_id, title, body, created_at, read) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            params![n.kind, n.ticket_id, n.title, n.body, now],
+        )?;
+        let id = conn.last_insert_rowid();
+        conn.execute(
+            "DELETE FROM notifications WHERE id NOT IN \
+             (SELECT id FROM notifications ORDER BY created_at DESC, id DESC LIMIT ?1)",
+            params![NOTIFICATIONS_KEPT],
+        )?;
+        Ok(HubNotification {
+            id,
+            kind: n.kind.clone(),
+            ticket_id: n.ticket_id,
+            title: n.title.clone(),
+            body: n.body.clone(),
+            created_at: now,
+            read: false,
+        })
+    }
+
+    /// Newest first.
+    pub fn notifications(&self, limit: i64) -> Result<Vec<HubNotification>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, kind, ticket_id, title, body, created_at, read FROM notifications \
+             ORDER BY created_at DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit], |r| {
+                Ok(HubNotification {
+                    id: r.get(0)?,
+                    kind: r.get(1)?,
+                    ticket_id: r.get(2)?,
+                    title: r.get(3)?,
+                    body: r.get(4)?,
+                    created_at: r.get(5)?,
+                    read: r.get::<_, i64>(6)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Marks entries read. `id` picks one entry, `ticket_id` every entry for
+    /// that ticket, and neither marks everything. Returns how many changed.
+    pub fn mark_notifications_read(
+        &self,
+        id: Option<i64>,
+        ticket_id: Option<i64>,
+    ) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = match (id, ticket_id) {
+            (Some(id), _) => conn.execute(
+                "UPDATE notifications SET read = 1 WHERE id = ?1 AND read = 0",
+                params![id],
+            )?,
+            (None, Some(ticket_id)) => conn.execute(
+                "UPDATE notifications SET read = 1 WHERE ticket_id = ?1 AND read = 0",
+                params![ticket_id],
+            )?,
+            (None, None) => {
+                conn.execute("UPDATE notifications SET read = 1 WHERE read = 0", [])?
+            }
+        };
+        Ok(changed)
+    }
+
+    pub fn clear_notifications(&self) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute("DELETE FROM notifications", [])?;
         Ok(())
     }
 }
@@ -881,8 +1011,47 @@ pub struct BucketCounts {
 pub struct SyncDiff {
     pub newly_in_pool: Vec<i64>,
     pub newly_assigned: Vec<i64>,
+    /// The user's tickets whose message count went up since the last pull.
+    pub message_bumps: Vec<MessageBump>,
     pub is_first_sync: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageBump {
+    pub ticket_id: i64,
+    pub previous: i64,
+    pub current: i64,
+}
+
+/// One entry in the notification hub.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubNotification {
+    pub id: i64,
+    /// `message`, `new-ticket` or `assigned`.
+    pub kind: String,
+    pub ticket_id: Option<i64>,
+    pub title: String,
+    pub body: String,
+    /// Unix millis.
+    pub created_at: i64,
+    pub read: bool,
+}
+
+/// What a window sends to record a notification.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewHubNotification {
+    pub kind: String,
+    pub ticket_id: Option<i64>,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// The hub is a recent-activity list, not an archive.
+const NOTIFICATIONS_KEPT: i64 = 200;
 
 #[cfg(test)]
 mod tests;

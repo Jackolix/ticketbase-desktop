@@ -38,7 +38,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { FilePreviewModal } from '@/components/ui/FilePreviewModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
-import { syncRefresh } from '@/lib/sync';
+import { markNotificationsRead, syncRefresh } from '@/lib/sync';
 import { parseTicketDate } from '@/lib/ticketDate';
 import { normalizeTicketText, splitQuotedReply } from '@/lib/richText';
 import { parseTemplateData } from '@/lib/templateData';
@@ -158,6 +158,11 @@ export function TicketDetail({
     void fetchHistory();
     void fetchTodos();
   }, [fetchHistory, fetchTodos]);
+
+  // Opening a ticket is reading its notifications, wherever they came from.
+  useEffect(() => {
+    void markNotificationsRead({ ticketId: ticket.id }).catch(() => {});
+  }, [ticket.id]);
 
   /**
    * Claims an unassigned ticket. Server-side this sets my_ticket_id, moves the

@@ -3,11 +3,20 @@ import { toast } from 'sonner';
 import { sendNotification, isPermissionGranted, requestPermission, onAction, registerActionTypes } from '@tauri-apps/plugin-notification';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { getTicket, onSyncChanged, syncSetInterval } from '@/lib/sync';
+import {
+  addNotification,
+  getTicket,
+  onSyncChanged,
+  syncSetInterval,
+  type HubNotificationKind,
+  type NewMessages,
+} from '@/lib/sync';
 
 interface NotificationSettings {
   enableNewTicketNotifications: boolean;
   enableAssignedTicketNotifications: boolean;
+  /** A customer (or anyone else) wrote a new message on one of my tickets. */
+  enableMessageNotifications: boolean;
   enableSound: boolean;
   soundVolume: number;
   ticketRefreshInterval: number; // in seconds
@@ -24,6 +33,16 @@ interface NotificationContextType {
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
 const STORAGE_KEY = 'notification-settings';
+
+/** OS notifications for new messages per sync; the rest are summarised. */
+const MAX_POPUPS_PER_SYNC = 3;
+/** Hub entries recorded for new or assigned tickets per sync. */
+const MAX_HUB_ENTRIES_PER_SYNC = 20;
+
+function truncate(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
 
 /**
  * Only one window may announce a ticket. Every window mounts this provider, so
@@ -44,6 +63,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     const defaults = {
       enableNewTicketNotifications: true,
       enableAssignedTicketNotifications: true,
+      enableMessageNotifications: true,
       enableSound: true,
       soundVolume: 0.5,
       ticketRefreshInterval: 30, // Default 30 seconds
@@ -219,6 +239,17 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
+    /** Hub entries are kept per ticket so each one can open its ticket. */
+    const record = (kind: HubNotificationKind, title: string, body: string, ticketId?: number) =>
+      addNotification({ kind, title, body, ticketId }).catch((error) => {
+        console.warn('Could not record notification:', error);
+      });
+
+    const summarize = (t: Awaited<ReturnType<typeof getTicket>>, ticketId: number) =>
+      t
+        ? [`#${t.id}`, t.company?.name, t.summary].filter(Boolean).join(' · ')
+        : `Ticket #${ticketId}`;
+
     const describe = async (ids: number[], assigned: boolean) => {
       if (ids.length === 0) return;
 
@@ -249,6 +280,50 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
       showNotification(title, message, ticketId);
       playSound();
+
+      // A busy pool can add dozens at once; the hub only needs the recent ones.
+      for (const id of ids.slice(0, MAX_HUB_ENTRIES_PER_SYNC)) {
+        const t = await getTicket(id).catch(() => null);
+        await record(
+          assigned ? 'assigned' : 'new-ticket',
+          assigned ? 'Ticket zugewiesen' : 'Neues Ticket im Pool',
+          summarize(t, id),
+          id,
+        );
+      }
+    };
+
+    const describeMessages = async (updates: NewMessages[]) => {
+      if (updates.length === 0) return;
+
+      for (const [index, update] of updates.entries()) {
+        const t = await getTicket(update.ticketId).catch(() => null);
+        const title = update.count > 1
+          ? `${update.count} neue Nachrichten zu #${update.ticketId}`
+          : `Neue Nachricht zu #${update.ticketId}`;
+        const quote = update.text
+          ? `${update.author ? `${update.author}: ` : ''}${truncate(update.text, 160)}`
+          : '';
+        const context = summarize(t, update.ticketId);
+        const body = quote ? `${quote}\n${context}` : context;
+
+        // One OS notification per ticket so each opens its own ticket, but
+        // not an avalanche of them; the hub still gets every entry.
+        if (index < MAX_POPUPS_PER_SYNC) {
+          showNotification(title, body, update.ticketId);
+        }
+        await record('message', title, body, update.ticketId);
+      }
+
+      if (updates.length > MAX_POPUPS_PER_SYNC) {
+        const rest = updates.length - MAX_POPUPS_PER_SYNC;
+        showNotification(
+          'Weitere neue Nachrichten',
+          `${rest} weitere ${rest === 1 ? 'Ticket hat' : 'Tickets haben'} neue Nachrichten`,
+        );
+      }
+
+      playSound();
     };
 
     const subscribe = async () => {
@@ -258,6 +333,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         }
         if (settingsRef.current.enableAssignedTicketNotifications) {
           await describe(change.newlyAssigned, true);
+        }
+        if (settingsRef.current.enableMessageNotifications) {
+          // Older engines did not send this field.
+          await describeMessages(change.newMessages ?? []);
         }
       });
 

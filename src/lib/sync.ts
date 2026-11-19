@@ -116,10 +116,70 @@ export interface SyncStatus {
   counts: BucketCounts | null;
 }
 
+/** Messages someone else added to one of the user's tickets since the last sync. */
+export interface NewMessages {
+  ticketId: number;
+  /** How many of the new messages were written by someone other than the user. */
+  count: number;
+  /** Author of the newest one; empty when the lookup failed. */
+  author: string;
+  /** Text of the newest one; empty when the lookup failed. */
+  text: string;
+}
+
 export interface SyncChanged {
   newlyInPool: number[];
   newlyAssigned: number[];
+  newMessages: NewMessages[];
   counts: BucketCounts;
+}
+
+export const EVENT_NOTIFICATIONS_CHANGED = 'notifications://changed';
+
+export type HubNotificationKind = 'message' | 'new-ticket' | 'assigned';
+
+/** One entry in the notification hub, kept in the local store. */
+export interface HubNotification {
+  id: number;
+  kind: HubNotificationKind;
+  ticketId: number | null;
+  title: string;
+  body: string;
+  /** Unix millis. */
+  createdAt: number;
+  read: boolean;
+}
+
+/** The notification hub, newest first. */
+export function listNotifications(limit = 100): Promise<HubNotification[]> {
+  return invoke<HubNotification[]>('notifications_list', { limit });
+}
+
+export function addNotification(notification: {
+  kind: HubNotificationKind;
+  ticketId?: number;
+  title: string;
+  body?: string;
+}): Promise<HubNotification> {
+  return invoke<HubNotification>('notifications_add', {
+    notification: { ...notification, ticketId: notification.ticketId ?? null },
+  });
+}
+
+/** Marks one entry (`id`), every entry for a ticket (`ticketId`), or with neither, all. */
+export function markNotificationsRead(target: { id?: number; ticketId?: number } = {}): Promise<void> {
+  return invoke('notifications_mark_read', {
+    id: target.id ?? null,
+    ticketId: target.ticketId ?? null,
+  });
+}
+
+export function clearNotifications(): Promise<void> {
+  return invoke('notifications_clear');
+}
+
+export function onNotificationsChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen(EVENT_NOTIFICATIONS_CHANGED, () => handler());
 }
 
 /** Starts syncing for this session and triggers an immediate pull. */

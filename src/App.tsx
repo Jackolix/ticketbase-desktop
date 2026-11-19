@@ -27,6 +27,7 @@ import { getTicket } from "./lib/sync";
 import { WindowManager } from "./lib/windowManager";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SyncIndicator } from "./components/SyncIndicator";
+import { NotificationHub } from "./components/NotificationHub";
 import { Titlebar } from "./components/Titlebar";
 import { CommandPalette } from "./components/CommandPalette";
 
@@ -291,6 +292,7 @@ function AppContent() {
         }
       >
         <SyncIndicator />
+        <NotificationHub onOpenTicket={(id) => void loadTicketById(id)} />
       </Titlebar>
       <SidebarProvider className="min-h-0 flex-1" open={sidebarOpen} onOpenChange={setSidebarOpen}>
       <TicketAppSidebar currentView={currentView} onViewChange={handleViewChange} />

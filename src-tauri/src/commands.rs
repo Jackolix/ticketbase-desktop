@@ -11,11 +11,11 @@
 
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::api::client::TicketQueryUser;
 use crate::api::models::{Customer, Ticket, CLOSED_STATUS_ID};
-use crate::store::{BucketCounts, TicketQuery, Timer};
+use crate::store::{BucketCounts, HubNotification, NewHubNotification, TicketQuery, Timer};
 use crate::sync::{Session, SyncEngine, SyncStatus};
 
 pub struct AppState {
@@ -287,6 +287,75 @@ pub fn timer_record(
     store
         .timer(ticket_id, user_id, now)
         .map_err(|e| e.to_string())
+}
+
+/// Emitted to every window whenever the notification hub changes, so the
+/// unread badge agrees across the main window and every ticket window.
+pub const EVENT_NOTIFICATIONS: &str = "notifications://changed";
+
+fn notify_hub_changed(app: &AppHandle) {
+    let _ = app.emit(EVENT_NOTIFICATIONS, ());
+}
+
+/// The notification hub, newest first.
+#[tauri::command]
+pub fn notifications_list(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<HubNotification>, String> {
+    state
+        .sync
+        .store()
+        .notifications(limit.unwrap_or(100).clamp(1, 500))
+        .map_err(|e| e.to_string())
+}
+
+/// Records an entry. Only the main window calls this, once per announcement,
+/// because it is the one that decides — from the user's settings — what is
+/// worth announcing at all.
+#[tauri::command]
+pub fn notifications_add(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notification: NewHubNotification,
+) -> Result<HubNotification, String> {
+    let added = state
+        .sync
+        .store()
+        .add_notification(&notification, now_millis())
+        .map_err(|e| e.to_string())?;
+    notify_hub_changed(&app);
+    Ok(added)
+}
+
+/// Marks one entry (`id`), every entry for a ticket (`ticketId`), or all.
+#[tauri::command]
+pub fn notifications_mark_read(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Option<i64>,
+    ticket_id: Option<i64>,
+) -> Result<(), String> {
+    let changed = state
+        .sync
+        .store()
+        .mark_notifications_read(id, ticket_id)
+        .map_err(|e| e.to_string())?;
+    if changed > 0 {
+        notify_hub_changed(&app);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn notifications_clear(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .sync
+        .store()
+        .clear_notifications()
+        .map_err(|e| e.to_string())?;
+    notify_hub_changed(&app);
+    Ok(())
 }
 
 fn now_millis() -> i64 {

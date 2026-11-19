@@ -291,6 +291,12 @@ export function Settings() {
               onChange={(v) => updateSettings({ enableAssignedTicketNotifications: v })}
             />
             <Toggle
+              label="Neue Nachrichten in meinen Tickets"
+              hint="Melden, wenn jemand anderes – z. B. der Kunde – eine Nachricht zu einem deiner Tickets schreibt. Wird bei jeder Aktualisierung geprüft."
+              checked={settings.enableMessageNotifications}
+              onChange={(v) => updateSettings({ enableMessageNotifications: v })}
+            />
+            <Toggle
               label="Ton"
               hint="Zusätzlich zur Benachrichtigung einen Ton abspielen."
               checked={settings.enableSound}

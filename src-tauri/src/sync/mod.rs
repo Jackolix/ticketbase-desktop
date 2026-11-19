@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
 
-use crate::api::client::{ApiClient, ApiError, TicketQueryUser};
+use crate::api::client::{ApiClient, ApiError, TicketMessage, TicketQueryUser};
 use crate::store::{BucketCounts, Store, SyncDiff};
 
 /// Emitted to every window whenever sync state changes.
@@ -93,8 +93,27 @@ pub struct Session {
 pub struct ChangedEvent {
     pub newly_in_pool: Vec<i64>,
     pub newly_assigned: Vec<i64>,
+    /// Messages someone else added to one of the user's tickets.
+    pub new_messages: Vec<NewMessages>,
     pub counts: BucketCounts,
 }
+
+/// New messages from other people on one of the user's tickets.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NewMessages {
+    pub ticket_id: i64,
+    /// How many of the new messages were written by someone else.
+    pub count: usize,
+    /// Author of the newest one; empty when unknown.
+    pub author: String,
+    /// Text of the newest one; empty when it could not be fetched.
+    pub text: String,
+}
+
+/// Upper bound on message lookups per sync, so a mass change on the server
+/// (a migration, a bulk import) cannot turn one poll into hundreds of calls.
+const MAX_MESSAGE_LOOKUPS: usize = 10;
 
 pub struct SyncEngine {
     store: Arc<Store>,
@@ -246,6 +265,10 @@ impl SyncEngine {
 
         self.refresh_customers_if_stale(&session.token, synced_at).await;
 
+        let new_messages = self
+            .describe_new_messages(&session, &diff.message_bumps)
+            .await;
+
         // One event for every window. Notification change-detection consumes
         // this, so a ticket is announced once no matter how many windows exist.
         let _ = app.emit(
@@ -253,11 +276,66 @@ impl SyncEngine {
             ChangedEvent {
                 newly_in_pool: diff.newly_in_pool.clone(),
                 newly_assigned: diff.newly_assigned.clone(),
+                new_messages,
                 counts,
             },
         );
 
         Ok(diff)
+    }
+
+    /// Works out who wrote the messages behind each count increase.
+    ///
+    /// The count alone cannot tell a customer's reply from the user's own
+    /// message sent a minute ago, so the ticket's messages are fetched and the
+    /// user's own are dropped. Infallible like the customer refresh: if the
+    /// lookup fails the bump is still reported, without author or text, because
+    /// a missed customer reply is worse than one notification too many.
+    async fn describe_new_messages(
+        &self,
+        session: &Session,
+        bumps: &[crate::store::MessageBump],
+    ) -> Vec<NewMessages> {
+        let mut out = Vec::new();
+
+        for (index, bump) in bumps.iter().enumerate() {
+            let added = (bump.current - bump.previous).max(0) as usize;
+
+            if index >= MAX_MESSAGE_LOOKUPS {
+                out.push(NewMessages {
+                    ticket_id: bump.ticket_id,
+                    count: added,
+                    author: String::new(),
+                    text: String::new(),
+                });
+                continue;
+            }
+
+            match self
+                .client
+                .get_ticket_messages(&session.token, bump.ticket_id)
+                .await
+            {
+                Ok(messages) => {
+                    if let Some(found) =
+                        summarize_new_messages(bump.ticket_id, &messages, added, session.user.id)
+                    {
+                        out.push(found);
+                    }
+                }
+                Err(err) => {
+                    log::warn!("could not read messages of ticket {}: {err}", bump.ticket_id);
+                    out.push(NewMessages {
+                        ticket_id: bump.ticket_id,
+                        count: added,
+                        author: String::new(),
+                        text: String::new(),
+                    });
+                }
+            }
+        }
+
+        out
     }
 
     /// Refreshes the cached customer list when it has aged out.
@@ -350,6 +428,31 @@ impl SyncEngine {
     }
 }
 
+/// Picks the `added` newest messages and keeps those written by someone else.
+///
+/// Returns None when every new message is the user's own, which is the case
+/// right after they reply from this app or the web UI.
+fn summarize_new_messages(
+    ticket_id: i64,
+    messages: &[TicketMessage],
+    added: usize,
+    my_user_id: i64,
+) -> Option<NewMessages> {
+    let start = messages.len().saturating_sub(added);
+    let others: Vec<&TicketMessage> = messages[start..]
+        .iter()
+        .filter(|m| m.from_user_id != my_user_id)
+        .collect();
+
+    let newest = others.last()?;
+    Some(NewMessages {
+        ticket_id,
+        count: others.len(),
+        author: newest.from_name.trim().to_string(),
+        text: newest.text.trim().to_string(),
+    })
+}
+
 /// Exponential backoff on the poll interval, capped.
 fn backoff(base: Duration, failures: u32) -> Duration {
     let factor = 2u32.saturating_pow(failures.min(10));
@@ -378,6 +481,48 @@ mod tests {
         // Never hammers the backend indefinitely.
         assert_eq!(backoff(base, 20), MAX_BACKOFF);
         assert!(backoff(base, 99) <= MAX_BACKOFF);
+    }
+
+    fn msg(id: i64, from: i64, name: &str, text: &str) -> TicketMessage {
+        TicketMessage {
+            id,
+            from_user_id: from,
+            from_name: name.into(),
+            text: text.into(),
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn new_messages_from_others_are_summarised() {
+        let messages = vec![
+            msg(1, 7, "Kunde", "alt"),
+            msg(2, 7, "Kunde", "Drucker geht wieder nicht"),
+            msg(3, 7, "Kunde", "  Bitte um Rückruf  "),
+        ];
+
+        let found = summarize_new_messages(42, &messages, 2, 1).unwrap();
+        assert_eq!(
+            found,
+            NewMessages {
+                ticket_id: 42,
+                count: 2,
+                author: "Kunde".into(),
+                text: "Bitte um Rückruf".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn my_own_new_messages_are_not_announced() {
+        let messages = vec![msg(1, 7, "Kunde", "Frage"), msg(2, 1, "Ich", "Antwort")];
+        assert_eq!(summarize_new_messages(42, &messages, 1, 1), None);
+
+        // A customer reply and mine in the same interval: only theirs counts.
+        let messages = vec![msg(1, 7, "Kunde", "Frage"), msg(2, 1, "Ich", "Antwort")];
+        let found = summarize_new_messages(42, &messages, 2, 1).unwrap();
+        assert_eq!(found.count, 1);
+        assert_eq!(found.text, "Frage");
     }
 
     #[test]

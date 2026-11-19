@@ -146,6 +146,10 @@ pub fn run() {
             commands::fetch_ticket_by_number,
             commands::timer_status,
             commands::timer_record,
+            commands::notifications_list,
+            commands::notifications_add,
+            commands::notifications_mark_read,
+            commands::notifications_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
