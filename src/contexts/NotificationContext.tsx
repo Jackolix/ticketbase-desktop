@@ -61,7 +61,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   
   const [settings, setSettings] = useState<NotificationSettings>(() => {
     const defaults = {
-      enableNewTicketNotifications: true,
+      // Off by default: the shared pool is everyone's queue, and announcing
+      // each arrival drowns out what concerns the user's own tickets. Saved
+      // settings still win, so anyone who turned it on keeps it.
+      enableNewTicketNotifications: false,
       enableAssignedTicketNotifications: true,
       enableMessageNotifications: true,
       enableSound: true,
