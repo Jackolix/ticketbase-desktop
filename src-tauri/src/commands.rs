@@ -34,7 +34,7 @@ pub fn sync_start(
 }
 
 /// Clears credentials and wipes the local store.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn sync_stop(state: State<'_, AppState>) -> Result<(), String> {
     state.sync.end_session();
     Ok(())
@@ -63,7 +63,7 @@ pub fn sync_status(state: State<'_, AppState>) -> SyncStatus {
 ///
 /// This replaces filtering a partially-loaded list in the browser, so results
 /// cover every synced ticket rather than the first 50 that happened to render.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn query_tickets(
     state: State<'_, AppState>,
     query: TicketQuery,
@@ -75,7 +75,7 @@ pub fn query_tickets(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ticket_counts(state: State<'_, AppState>) -> Result<BucketCounts, String> {
     state.sync.store().counts().map_err(|e| e.to_string())
 }
@@ -119,7 +119,7 @@ pub async fn get_ticket(
 /// Answers from SQLite, so it can run on every keystroke. The cache is filled
 /// by the sync engine; before the first sync completes this returns nothing
 /// rather than failing, and the search box simply shows no suggestions.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn search_customers(
     state: State<'_, AppState>,
     query: String,
@@ -239,7 +239,7 @@ pub enum TimerAction {
 /// returning, and its `total_time` is a rounded billing figure that stays 0
 /// until the first pause. Both windows and both restarts read from here
 /// instead, which is why a reopened ticket no longer starts counting at zero.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn timer_status(
     state: State<'_, AppState>,
     ticket_id: i64,
@@ -258,7 +258,7 @@ pub fn timer_status(
 ///
 /// `base_ms` is only consulted by `Resume` when there is no local record, to
 /// seed the total from whatever the server could tell us.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn timer_record(
     state: State<'_, AppState>,
     ticket_id: i64,
@@ -298,7 +298,7 @@ fn notify_hub_changed(app: &AppHandle) {
 }
 
 /// The notification hub, newest first.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn notifications_list(
     state: State<'_, AppState>,
     limit: Option<i64>,
@@ -313,7 +313,7 @@ pub fn notifications_list(
 /// Records an entry. Only the main window calls this, once per announcement,
 /// because it is the one that decides — from the user's settings — what is
 /// worth announcing at all.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn notifications_add(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -329,7 +329,7 @@ pub fn notifications_add(
 }
 
 /// Marks one entry (`id`), every entry for a ticket (`ticketId`), or all.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn notifications_mark_read(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -347,7 +347,7 @@ pub fn notifications_mark_read(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn notifications_clear(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state
         .sync

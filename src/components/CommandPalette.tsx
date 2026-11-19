@@ -91,16 +91,17 @@ export function CommandPalette({
 
     const timer = setTimeout(async () => {
       try {
-        const filters = parseSearch(trimmed).filters;
-        const query = { ...filters, sort: 'date-desc' as const, limit: RESULT_LIMIT };
+        const parsed = parseSearch(trimmed);
+        const query = { ...parsed.filters, sort: 'date-desc' as const, limit: RESULT_LIMIT };
         let found = await queryTickets(query);
 
         // A ticket number the store does not have is very often a closed one,
         // which `getTickets` filters out and so can never be synced. Ask the
         // backend directly rather than reporting it as missing.
-        if (found.length === 0 && filters.id !== undefined) {
-          const fetched = await fetchTicketByNumber(filters.id);
-          if (fetched) found = [fetched];
+        const number = parsed.filters.id ?? parsed.number;
+        if (number !== undefined && !found.some((ticket) => ticket.id === number)) {
+          const fetched = await fetchTicketByNumber(number);
+          if (fetched) found = [fetched, ...found];
         }
 
         if (token === requestToken.current) setResults(found);

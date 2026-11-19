@@ -43,10 +43,15 @@ import {
   SEARCH_FIELDS,
   SORT_LABELS,
   activeTermAt,
+  fieldsMatching,
   parseSearch,
   removeChip,
+  replaceWord,
   setTermValue,
+  wordAt,
 } from '@/lib/searchQuery';
+import { containsAll, excerpt, fold, highlight, searchWords } from '@/lib/searchHighlight';
+import { normalizeTicketText } from '@/lib/richText';
 import { searchCustomers, type Customer, type TicketSort } from '@/lib/sync';
 import { useHotkey } from '@/hooks/useHotkey';
 import { ScheduleTicketDialog, TicketRowMenu } from './TicketRowMenu';
@@ -144,11 +149,23 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
 
   const parsed = useMemo(() => parseSearch(filterState.searchTerm), [filterState.searchTerm]);
   const activeTerm = useMemo(() => activeTermAt(draft, caret), [draft, caret]);
+  /** The plain word being typed, when the caret is not in a `field:` term. */
+  const activeWord = useMemo(
+    () => (activeTerm ? null : wordAt(draft, caret)),
+    [activeTerm, draft, caret],
+  );
+
+  /** What the rows highlight: the free-text words, and the company term. */
+  const words = useMemo(() => searchWords(parsed.filters.search), [parsed.filters.search]);
+  const companyWords = useMemo(
+    () => (parsed.filters.companyName ? [...words, parsed.filters.companyName] : words),
+    [words, parsed.filters.companyName],
+  );
 
   // Debounce so each keystroke does not re-query the store.
   useEffect(() => {
     if (draft === filterState.searchTerm) return;
-    const timer = setTimeout(() => updateFilterState({ searchTerm: draft }), 180);
+    const timer = setTimeout(() => updateFilterState({ searchTerm: draft }), 150);
     return () => clearTimeout(timer);
   }, [draft, filterState.searchTerm, updateFilterState]);
 
@@ -187,16 +204,26 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
    * Answered from the cached customer list in SQLite, so the short debounce is
    * about not thrashing React rather than about sparing the backend.
    */
+  // A plain word of three letters or more is checked against the customer
+  // list too, so typing "müller" can offer to filter by that customer.
+  const customerNeedle =
+    activeTerm?.filter === 'companyName'
+      ? activeTerm.value
+      : activeWord && activeWord.text.length >= 3 && !/^\d+$/.test(activeWord.text)
+        ? activeWord.text
+        : null;
+  const customerLimit = activeTerm ? 8 : 4;
+
   useEffect(() => {
-    if (activeTerm?.filter !== 'companyName') {
+    if (customerNeedle === null) {
       setCustomerHits([]);
       return;
     }
 
     let cancelled = false;
-    const needle = activeTerm.value;
+    const needle = customerNeedle;
     const timer = setTimeout(() => {
-      void searchCustomers(needle, 8)
+      void searchCustomers(needle, customerLimit)
         .then((hits) => {
           if (!cancelled) setCustomerHits(hits);
         })
@@ -210,7 +237,7 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [activeTerm?.filter, activeTerm?.value]);
+  }, [customerNeedle, customerLimit]);
 
   const applyTerm = useCallback(
     (value: string) => {
@@ -233,61 +260,157 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
     searchRef.current?.focus();
   }, []);
 
-  const suggestions = useMemo<Suggestion[]>(() => {
+  /** Turns the plain word under the caret into a field term. */
+  const applyWord = useCallback(
+    (field: string, value: string) => {
+      if (!activeWord) return;
+      const { text, caret: next } = replaceWord(draft, activeWord, field, value);
+      pendingCaret.current = next;
+      setDraft(text);
+      setShowSuggestions(false);
+      searchRef.current?.focus();
+    },
+    [activeWord, draft],
+  );
+
+  /**
+   * What the dropdown offers, depending on where the caret is.
+   *
+   *   * In a `field:` term — values for it, the first one preselected, since
+   *     finishing the term is plainly what is going on.
+   *   * In a plain word — filters it might have meant ("müller" → the customer
+   *     Müller Logistik), with nothing preselected: Enter must still just
+   *     search, not swap the word for something the user did not pick.
+   *   * In an empty box — the available fields, as a reminder.
+   */
+  const { suggestions, preselect } = useMemo<{ suggestions: Suggestion[]; preselect: boolean }>(() => {
+    const customerSuggestion = (customer: Customer, apply: () => void, group?: string) => ({
+      key: `c-${customer.id}`,
+      group,
+      primary: customer.name,
+      secondary: [customer.number, [customer.zip, customer.location].filter(Boolean).join(' ')]
+        .filter(Boolean)
+        .join(' · '),
+      muted: customer.passive !== 0,
+      apply,
+    });
+
     if (activeTerm?.filter === 'companyName') {
-      return customerHits.map((customer) => ({
-        key: `c-${customer.id}`,
-        primary: customer.name,
-        secondary: [customer.number, [customer.zip, customer.location].filter(Boolean).join(' ')]
-          .filter(Boolean)
-          .join(' · '),
-        muted: customer.passive !== 0,
-        apply: () => applyTerm(customer.name),
-      }));
+      return {
+        preselect: true,
+        suggestions: customerHits.map((customer) =>
+          customerSuggestion(customer, () => applyTerm(customer.name), 'Kunden — Name oder Kundennummer'),
+        ),
+      };
     }
 
     if (activeTerm?.filter === 'status') {
-      const needle = activeTerm.value.toLowerCase();
-      return TICKET_STATUS_OPTIONS.filter((option) =>
-        option.label.toLowerCase().includes(needle),
-      ).map((option) => ({
-        key: `s-${option.id}`,
-        primary: option.label,
-        apply: () => applyTerm(option.label),
-      }));
+      const needle = fold(activeTerm.value);
+      return {
+        preselect: true,
+        suggestions: TICKET_STATUS_OPTIONS.filter((option) => fold(option.label).includes(needle)).map(
+          (option) => ({
+            key: `s-${option.id}`,
+            primary: option.label,
+            apply: () => applyTerm(option.label),
+          }),
+        ),
+      };
     }
 
     if (activeTerm?.filter === 'priority') {
-      const needle = activeTerm.value.toLowerCase();
-      return PRIORITY_SUGGESTIONS.filter((option) =>
-        option.value.toLowerCase().includes(needle),
-      ).map((option) => ({
-        key: `p-${option.value}`,
-        primary: option.label,
-        apply: () => applyTerm(option.value),
-      }));
+      const needle = fold(activeTerm.value);
+      return {
+        preselect: true,
+        suggestions: PRIORITY_SUGGESTIONS.filter((option) => fold(option.value).includes(needle)).map(
+          (option) => ({
+            key: `p-${option.value}`,
+            primary: option.label,
+            apply: () => applyTerm(option.value),
+          }),
+        ),
+      };
     }
 
-    // No term under the caret: offer the fields themselves.
-    if (!activeTerm) {
-      return SEARCH_FIELDS.map((field) => ({
+    if (activeTerm?.filter === 'dateFrom' || activeTerm?.filter === 'dateTo') {
+      return {
+        preselect: true,
+        suggestions: dateSuggestions(activeTerm.filter).map((option) => ({
+          key: `d-${option.label}`,
+          primary: option.label,
+          secondary: option.value,
+          apply: () => applyTerm(option.value),
+        })),
+      };
+    }
+
+    if (activeWord) {
+      const fields = fieldsMatching(activeWord.text).map((field) => ({
         key: `f-${field.field}`,
+        group: 'Filter',
         primary: `${field.field}:`,
         secondary: field.hint,
         mono: true,
-        apply: () => insertField(field.field),
+        apply: () => {
+          const { text, caret: next } = replaceWord(draft, activeWord, field.field, '');
+          // replaceWord leaves `field:` followed by a separator; the caret
+          // belongs right after the colon so the value can be typed.
+          pendingCaret.current = activeWord.start + field.field.length + 1;
+          setDraft(text.slice(0, pendingCaret.current) + text.slice(next));
+          searchRef.current?.focus();
+        },
       }));
+
+      const customers = customerHits.map((customer) =>
+        customerSuggestion(customer, () => applyWord('firma', customer.name), 'Nur Tickets von Kunde'),
+      );
+
+      const needle = fold(activeWord.text);
+      const statuses =
+        needle.length >= 3
+          ? TICKET_STATUS_OPTIONS.filter((option) => fold(option.label).includes(needle)).map(
+              (option) => ({
+                key: `s-${option.id}`,
+                group: 'Nur Tickets mit Status',
+                primary: option.label,
+                apply: () => applyWord('status', option.label),
+              }),
+            )
+          : [];
+
+      return { preselect: false, suggestions: [...fields, ...customers, ...statuses] };
     }
 
-    return [];
-  }, [activeTerm, customerHits, applyTerm, insertField]);
+    if (!activeTerm && draft.trim() === '') {
+      return {
+        preselect: false,
+        suggestions: SEARCH_FIELDS.map((field) => ({
+          key: `f-${field.field}`,
+          group: 'Filter — oder einfach Stichworte, Nummer, Kunde tippen',
+          primary: `${field.field}:`,
+          secondary: field.hint,
+          mono: true,
+          apply: () => insertField(field.field),
+        })),
+      };
+    }
+
+    return { preselect: false, suggestions: [] };
+  }, [activeTerm, activeWord, customerHits, applyTerm, applyWord, insertField, draft]);
 
   // A changed suggestion list must not leave the highlight pointing past its end.
   useEffect(() => {
-    setHighlighted(0);
-  }, [suggestions.length, activeTerm?.field]);
+    setHighlighted(preselect ? 0 : -1);
+  }, [suggestions.length, activeTerm?.field, preselect]);
 
   const suggestionsOpen = showSuggestions && suggestions.length > 0;
+
+  /** Moves focus from the search box into the list. */
+  const focusFirstRow = useCallback(() => {
+    const row = scrollRefs.current[activeTab]?.querySelector<HTMLElement>('tr[data-ticket-row]');
+    row?.focus();
+    return Boolean(row);
+  }, [activeTab]);
 
   const onSearchKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -300,23 +423,58 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
         return;
       }
 
-      if (!suggestionsOpen) {
-        if (event.key === 'ArrowDown') setShowSuggestions(true);
+      if (suggestionsOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        const step = event.key === 'ArrowDown' ? 1 : -1;
+        setHighlighted((index) => {
+          const from = index < 0 ? (step > 0 ? -1 : 0) : index;
+          return (from + step + suggestions.length) % suggestions.length;
+        });
+        return;
+      }
+
+      if (suggestionsOpen && highlighted >= 0 && (event.key === 'Enter' || event.key === 'Tab')) {
+        event.preventDefault();
+        suggestions[highlighted]?.apply();
         return;
       }
 
       if (event.key === 'ArrowDown') {
+        // Into the results, so the keyboard never has to leave the board.
+        if (focusFirstRow()) event.preventDefault();
+        else setShowSuggestions(true);
+        return;
+      }
+
+      if (event.key === 'Enter') {
         event.preventDefault();
-        setHighlighted((index) => (index + 1) % suggestions.length);
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        setHighlighted((index) => (index - 1 + suggestions.length) % suggestions.length);
-      } else if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault();
-        suggestions[highlighted]?.apply();
+        setShowSuggestions(false);
+        // Search now rather than after the debounce.
+        if (draft !== filterState.searchTerm) {
+          updateFilterState({ searchTerm: draft });
+          return;
+        }
+        // When the answer is unambiguous, Enter opens it: the ticket whose
+        // number was typed, or the only result there is.
+        const number = parsed.filters.id ?? parsed.number;
+        const target =
+          (number !== undefined && rows.find((ticket) => ticket.id === number)) ||
+          (rows.length === 1 ? rows[0] : undefined);
+        if (target) onTicketSelect(target, true);
       }
     },
-    [suggestionsOpen, suggestions, highlighted],
+    [
+      suggestionsOpen,
+      suggestions,
+      highlighted,
+      focusFirstRow,
+      draft,
+      filterState.searchTerm,
+      updateFilterState,
+      parsed,
+      rows,
+      onTicketSelect,
+    ],
   );
 
   const syncCaret = useCallback((event: React.SyntheticEvent<HTMLInputElement>) => {
@@ -392,6 +550,24 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
 
   const hasQuery = filterState.searchTerm.trim().length > 0;
 
+  const matchCounts: Record<BoardTab, number> = {
+    my: tickets.my_tickets.length,
+    new: tickets.new_tickets.length,
+    all: tickets.all_tickets.length,
+    archive: tickets.archive_tickets.length,
+  };
+
+  /** Where the search did find something, when this tab came up empty. */
+  const elsewhereTab =
+    hasQuery && rows.length === 0
+      ? TABS.filter((tab) => tab.key !== activeTab && matchCounts[tab.key] > 0).sort(
+          (a, b) => matchCounts[b.key] - matchCounts[a.key],
+        )[0]
+      : undefined;
+  const elsewhere = elsewhereTab
+    ? { key: elsewhereTab.key, label: elsewhereTab.label, count: matchCounts[elsewhereTab.key] }
+    : null;
+
   const resetSearch = useCallback(() => {
     setDraft('');
     setCaret(0);
@@ -422,8 +598,8 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
             onKeyDown={onSearchKeyDown}
             onFocus={() => setShowSuggestions(true)}
             onBlur={() => window.setTimeout(() => setShowSuggestions(false), 120)}
-            placeholder="Suchen — 4812, firma:müller, status:warten, prio:hoch"
-            className="h-10 pl-9 pr-9 font-mono text-sm"
+            placeholder="Suchen nach Nummer, Stichwort, Kunde, Kontakt …"
+            className="h-10 pl-9 pr-9 text-sm"
             aria-label="Tickets durchsuchen"
             aria-expanded={suggestionsOpen}
             aria-autocomplete="list"
@@ -450,13 +626,15 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
               role="listbox"
               className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-md border bg-popover p-1 shadow-md"
             >
-              {activeTerm?.filter === 'companyName' && (
-                <li className="px-2 pb-1 pt-0.5 text-xs text-muted-foreground">
-                  Kunden — Name oder Kundennummer
-                </li>
-              )}
               {suggestions.map((suggestion, index) => (
                 <li key={suggestion.key}>
+                  {suggestion.group && suggestion.group !== suggestions[index - 1]?.group && (
+                    <div
+                      className={`px-2 pb-1 text-xs text-muted-foreground ${index > 0 ? 'mt-1 border-t pt-2' : 'pt-0.5'}`}
+                    >
+                      {suggestion.group}
+                    </div>
+                  )}
                   <button
                     type="button"
                     role="option"
@@ -528,10 +706,14 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
                 setDraft(next);
                 updateFilterState({ searchTerm: next });
               }}
-              className="inline-flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 font-mono text-xs hover:bg-accent"
+              title={chip.invalid ? 'Datum nicht erkannt — z. B. 1.9.2026 oder 2026-09-01' : 'Filter entfernen'}
+              className={[
+                'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs hover:bg-accent',
+                chip.invalid ? 'bg-tone-danger-soft text-tone-danger line-through' : 'bg-secondary',
+              ].join(' ')}
             >
-              <span className="text-muted-foreground">{chip.field}:</span>
-              <span>{chip.value}</span>
+              <span className="text-muted-foreground">{CHIP_LABELS[chip.field] ?? chip.field}</span>
+              <span className="font-medium">{chip.value}</span>
               <X className="h-3.5 w-3.5 opacity-60" />
             </button>
           ))}
@@ -542,24 +724,41 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
       <div className="flex items-center gap-5 border-b">
         {TABS.map((tab) => {
           const active = activeTab === tab.key;
+          // While searching, each tab says how many of its tickets match, so a
+          // hit in another list is visible without clicking through them all.
+          const matches = matchCounts[tab.key];
+          const empty = hasQuery && matches === 0;
           return (
             <button
               key={tab.key}
               type="button"
               onClick={() => setActiveTab(tab.key)}
               aria-current={active ? 'page' : undefined}
+              title={hasQuery ? `${matches} von ${counts[tab.countKey]} passen zur Suche` : undefined}
               className={[
                 'relative -mb-px flex items-center gap-1.5 pb-2 text-sm transition-colors',
                 active
                   ? 'font-semibold text-foreground after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-foreground'
                   : 'text-muted-foreground hover:text-foreground',
+                empty && !active ? 'opacity-50' : '',
               ].join(' ')}
             >
               {tab.key === 'archive' && <Archive className="h-3.5 w-3.5" />}
               {tab.label}
-              <span className="font-mono text-xs tabular-nums opacity-70">
-                {counts[tab.countKey]}
-              </span>
+              {hasQuery ? (
+                <span
+                  className={[
+                    'rounded px-1 font-mono text-xs tabular-nums',
+                    matches > 0 ? 'bg-tone-info-soft text-tone-info' : 'opacity-70',
+                  ].join(' ')}
+                >
+                  {matches}
+                </span>
+              ) : (
+                <span className="font-mono text-xs tabular-nums opacity-70">
+                  {counts[tab.countKey]}
+                </span>
+              )}
             </button>
           );
         })}
@@ -589,8 +788,8 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
             tab={activeTab}
             hasQuery={hasQuery}
             isLookingUpNumber={isLookingUpNumber}
-            archiveMatches={tickets.archive_tickets.length}
-            onShowArchive={() => setActiveTab('archive')}
+            elsewhere={elsewhere}
+            onShowTab={setActiveTab}
             onClear={resetSearch}
           />
         ) : (
@@ -634,6 +833,9 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
                     ref={index === 0 ? measureRow : undefined}
                     ticket={ticket}
                     tokens={tokens}
+                    words={words}
+                    companyWords={companyWords}
+                    onExitTop={() => searchRef.current?.focus()}
                     onSelect={() => onTicketSelect(ticket, true)}
                     onOpenWindow={(e) => void openInWindow(ticket, e)}
                     onHoverStart={(event) => showPreview(ticket, event)}
@@ -675,8 +877,105 @@ export function TicketBoard({ onTicketSelect }: TicketBoardProps) {
   );
 }
 
+/** How a chip names its field: the words, not the syntax. */
+const CHIP_LABELS: Record<string, string> = {
+  id: 'Nr.',
+  nr: 'Nr.',
+  firma: 'Kunde',
+  kunde: 'Kunde',
+  company: 'Kunde',
+  status: 'Status',
+  prio: 'Priorität',
+  priority: 'Priorität',
+  von: 'ab',
+  from: 'ab',
+  bis: 'bis',
+  to: 'bis',
+};
+
+/** Ready-made values for `von:` and `bis:`, written as people write dates. */
+function dateSuggestions(field: 'dateFrom' | 'dateTo'): Array<{ label: string; value: string }> {
+  const today = new Date();
+  const format = (date: Date) =>
+    `${date.getDate()}.${date.getMonth() + 1}.${date.getFullYear()}`;
+  const daysAgo = (days: number) => {
+    const date = new Date(today);
+    date.setDate(date.getDate() - days);
+    return date;
+  };
+
+  if (field === 'dateTo') {
+    return [
+      { label: 'Heute', value: format(today) },
+      { label: 'Gestern', value: format(daysAgo(1)) },
+      { label: 'Vor einer Woche', value: format(daysAgo(7)) },
+      { label: 'Vor einem Monat', value: format(daysAgo(30)) },
+    ];
+  }
+
+  return [
+    { label: 'Heute', value: format(today) },
+    { label: 'Letzte 7 Tage', value: format(daysAgo(7)) },
+    { label: 'Letzte 30 Tage', value: format(daysAgo(30)) },
+    { label: 'Seit Monatsanfang', value: format(new Date(today.getFullYear(), today.getMonth(), 1)) },
+    { label: 'Seit Jahresanfang', value: format(new Date(today.getFullYear(), 0, 1)) },
+  ];
+}
+
+/** Text with the search words marked. */
+function Highlighted({ text, words }: { text: string; words: string[] }) {
+  if (words.length === 0 || !text) return <>{text}</>;
+  return (
+    <>
+      {highlight(text, words).map((part, index) =>
+        part.match ? (
+          <mark key={index} className="rounded-[2px] bg-tone-warning-soft text-inherit">
+            {part.text}
+          </mark>
+        ) : (
+          <span key={index}>{part.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * Why a row matched, when the row itself does not show it.
+ *
+ * A search for a contact's name, or for something only the description
+ * mentions, otherwise lists tickets with nothing visibly in common with the
+ * query — which reads as the search being broken.
+ */
+function matchContext(ticket: Ticket, words: string[]): { label: string; text: string } | null {
+  if (words.length === 0) return null;
+  const visible = [ticket.summary, ticket.company?.name, ticket.subject, ticket.pool_name, String(ticket.id)]
+    .filter(Boolean)
+    .join(' ');
+  if (containsAll(visible, words)) return null;
+
+  for (const [label, value] of [
+    ['Kontakt', ticket.ticketUser],
+    ['Erstellt von', ticket.ticketCreator],
+  ] as const) {
+    if (value && containsAll(value, words.filter((word) => !containsAll(visible, [word])))) {
+      return { label, text: value };
+    }
+  }
+
+  const description = excerpt(normalizeTicketText(ticket.description), words);
+  if (description) return { label: 'Beschreibung', text: description };
+
+  const form = excerpt(ticket.template_data ?? '', words);
+  if (form) return { label: 'Formular', text: form };
+
+  return null;
+}
+
 interface Suggestion {
   key: string;
+  /** A heading shown above the first suggestion of each group. */
+  group?: string;
   primary: string;
   secondary?: string;
   /** Field names read better monospaced; company names do not. */
@@ -829,6 +1128,21 @@ interface TicketRowProps extends React.HTMLAttributes<HTMLTableRowElement> {
   onOpenWindow: (event: React.MouseEvent) => void;
   onHoverStart: (event: React.MouseEvent<HTMLTableRowElement>) => void;
   onHoverEnd: () => void;
+  /** Free-text search words, marked wherever they appear in the row. */
+  words: string[];
+  /** The same, plus the `firma:` value, for the company column. */
+  companyWords: string[];
+  /** Arrow-up past the first row hands focus back to the search box. */
+  onExitTop: () => void;
+}
+
+/** The next or previous ticket row, skipping the virtualization spacers. */
+function siblingRow(row: HTMLElement, direction: 1 | -1): HTMLElement | null {
+  let node = direction > 0 ? row.nextElementSibling : row.previousElementSibling;
+  while (node && !(node as HTMLElement).dataset.ticketRow) {
+    node = direction > 0 ? node.nextElementSibling : node.previousElementSibling;
+  }
+  return node as HTMLElement | null;
 }
 
 /**
@@ -838,11 +1152,23 @@ interface TicketRowProps extends React.HTMLAttributes<HTMLTableRowElement> {
  * props to this component, and they have to reach the actual element.
  */
 const TicketRow = forwardRef<HTMLTableRowElement, TicketRowProps>(function TicketRow(
-  { ticket, tokens, onSelect, onOpenWindow, onHoverStart, onHoverEnd, ...rest },
+  {
+    ticket,
+    tokens,
+    onSelect,
+    onOpenWindow,
+    onHoverStart,
+    onHoverEnd,
+    words,
+    companyWords,
+    onExitTop,
+    ...rest
+  },
   ref,
 ) {
   const running = isRunning(ticket.playStatus);
   const playing = toPlayerState(ticket.playStatus) !== 'stopped';
+  const context = useMemo(() => matchContext(ticket, words), [ticket, words]);
 
   return (
     <tr
@@ -859,8 +1185,14 @@ const TicketRow = forwardRef<HTMLTableRowElement, TicketRowProps>(function Ticke
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onSelect();
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const next = siblingRow(e.currentTarget, e.key === 'ArrowDown' ? 1 : -1);
+          if (next) next.focus();
+          else if (e.key === 'ArrowUp') onExitTop();
         }
       }}
+      data-ticket-row="true"
       tabIndex={0}
       className="group cursor-pointer border-b transition-colors last:border-0 hover:bg-accent/50 focus:bg-accent/50 focus:outline-none data-[state=open]:bg-accent/50"
     >
@@ -877,7 +1209,7 @@ const TicketRow = forwardRef<HTMLTableRowElement, TicketRowProps>(function Ticke
       <td
         className={`whitespace-nowrap pl-3 pr-3 font-mono tabular-nums text-muted-foreground ${tokens.row} ${tokens.mono}`}
       >
-        {ticket.id}
+        <Highlighted text={String(ticket.id)} words={words.filter((word) => /^\d+$/.test(word))} />
       </td>
 
       {/* `max-w-0` with `w-full` is what makes truncation work in a table: a
@@ -886,7 +1218,9 @@ const TicketRow = forwardRef<HTMLTableRowElement, TicketRowProps>(function Ticke
           scrollbar came from. */}
       <td className={`w-full max-w-0 pr-3 ${tokens.row}`}>
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className={`truncate font-medium ${tokens.title}`}>{ticket.summary || '—'}</span>
+          <span className={`truncate font-medium ${tokens.title}`}>
+            {ticket.summary ? <Highlighted text={ticket.summary} words={words} /> : '—'}
+          </span>
           {ticket.attachments.length > 0 && (
             <Paperclip className={`shrink-0 text-muted-foreground ${tokens.icon}`} />
           )}
@@ -900,16 +1234,28 @@ const TicketRow = forwardRef<HTMLTableRowElement, TicketRowProps>(function Ticke
           )}
         </div>
         <div className={`truncate text-muted-foreground ${tokens.meta}`}>
-          {[ticket.subject, ticket.pool_name, priorityLabel(ticket.priority)]
-            .filter(Boolean)
-            .join(' · ')}
+          {context ? (
+            // The match is somewhere the row does not otherwise show, so show
+            // it here instead of the subject line.
+            <>
+              <span className="font-medium">{context.label}: </span>
+              <Highlighted text={context.text} words={words} />
+            </>
+          ) : (
+            <Highlighted
+              text={[ticket.subject, ticket.pool_name, priorityLabel(ticket.priority)]
+                .filter(Boolean)
+                .join(' · ')}
+              words={words}
+            />
+          )}
         </div>
       </td>
 
       <td
         className={`hidden truncate whitespace-nowrap pr-3 text-muted-foreground md:table-cell ${tokens.company} ${tokens.row} ${tokens.meta}`}
       >
-        {ticket.company?.name}
+        <Highlighted text={ticket.company?.name ?? ''} words={companyWords} />
       </td>
 
       <td
@@ -969,16 +1315,16 @@ function EmptyState({
   tab,
   hasQuery,
   isLookingUpNumber,
-  archiveMatches,
-  onShowArchive,
+  elsewhere,
+  onShowTab,
   onClear,
 }: {
   tab: BoardTab;
   hasQuery: boolean;
   isLookingUpNumber: boolean;
-  /** How many archived tickets the same search did match. */
-  archiveMatches: number;
-  onShowArchive: () => void;
+  /** Another tab where the same search did find tickets. */
+  elsewhere: { key: BoardTab; label: string; count: number } | null;
+  onShowTab: (tab: BoardTab) => void;
   onClear: () => void;
 }) {
   if (isLookingUpNumber) {
@@ -991,10 +1337,37 @@ function EmptyState({
   }
 
   const archive = tab === 'archive';
-  // The search found nothing here but did find something in the archive — most
-  // often because a closed ticket number was just looked up and landed there.
-  // Saying so without offering the jump would be a riddle, not a hint.
-  const elsewhere = !archive && archiveMatches > 0;
+
+  // The search found nothing here but did elsewhere — often a closed ticket
+  // number that was just looked up and landed in the archive, or a pool ticket
+  // searched for under "Meine". Saying so without offering the jump would be a
+  // riddle, not a hint.
+  if (elsewhere) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 p-12 text-center">
+        <Search className="h-8 w-8 text-muted-foreground" />
+        <div className="space-y-1">
+          <p className="text-sm font-medium">
+            Hier nichts — aber {elsewhere.count} in „{elsewhere.label}“
+          </p>
+          {elsewhere.key === 'archive' && (
+            <p className="max-w-md text-sm text-muted-foreground">
+              Abgeschlossene Tickets stehen nicht in den laufenden Listen.
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => onShowTab(elsewhere.key)}>
+            {elsewhere.key === 'archive' && <Archive className="mr-1.5 h-3.5 w-3.5" />}
+            In „{elsewhere.label}“ ansehen
+          </Button>
+          <Button variant="outline" size="sm" onClick={onClear}>
+            Suche zurücksetzen
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center justify-center gap-3 p-12 text-center">
@@ -1005,37 +1378,25 @@ function EmptyState({
       )}
       <div className="space-y-1">
         <p className="text-sm font-medium">
-          {archive
-            ? 'Noch nichts im Archiv'
-            : elsewhere
-              ? `Nichts in dieser Liste — aber ${archiveMatches} im Archiv`
-              : hasQuery
-                ? 'Keine Tickets für diese Suche'
-                : 'Keine Tickets in dieser Liste'}
+          {hasQuery
+            ? 'Keine Tickets für diese Suche'
+            : archive
+              ? 'Noch nichts im Archiv'
+              : 'Keine Tickets in dieser Liste'}
         </p>
         <p className="max-w-md text-sm text-muted-foreground">
           {archive
             ? 'Abgeschlossene Tickets kommen nicht über die Synchronisierung — sie werden pro Kunde oder über die Ticketnummer geladen.'
-            : elsewhere
-              ? 'Abgeschlossene Tickets stehen nicht in den laufenden Listen.'
-              : hasQuery
-                ? 'Die Suche läuft über alle synchronisierten Tickets. Abgeschlossene Tickets stehen im Archiv.'
-                : 'Sobald Tickets zugewiesen werden, erscheinen sie hier.'}
+            : hasQuery
+              ? 'Gesucht wird in Titel, Beschreibung, Kunde, Kontakt und Formular aller synchronisierten Tickets — jedes Wort muss irgendwo vorkommen.'
+              : 'Sobald Tickets zugewiesen werden, erscheinen sie hier.'}
         </p>
       </div>
-      <div className="flex items-center gap-2">
-        {elsewhere && (
-          <Button size="sm" onClick={onShowArchive}>
-            <Archive className="mr-1.5 h-3.5 w-3.5" />
-            Im Archiv ansehen
-          </Button>
-        )}
-        {hasQuery && !archive && (
-          <Button variant="outline" size="sm" onClick={onClear}>
-            Suche zurücksetzen
-          </Button>
-        )}
-      </div>
+      {hasQuery && (
+        <Button variant="outline" size="sm" onClick={onClear}>
+          Suche zurücksetzen
+        </Button>
+      )}
     </div>
   );
 }

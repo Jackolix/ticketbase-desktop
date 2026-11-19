@@ -1,12 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { activeTermAt, parseSearch, removeChip, setTermValue } from './searchQuery';
+import {
+  activeTermAt,
+  fieldsMatching,
+  parseDate,
+  parseSearch,
+  removeChip,
+  replaceWord,
+  setTermValue,
+  wordAt,
+} from './searchQuery';
 
 describe('parseSearch', () => {
-  it('reads a bare number as a ticket id', () => {
-    const { filters, looksLikeId } = parseSearch('4812');
-    expect(filters.id).toBe(4812);
+  it('searches a bare number as text and marks it as a likely ticket number', () => {
+    // "214" is as often a phone extension as a ticket, so it is not an exact
+    // id filter; the store ranks the ticket with that number first instead.
+    const { filters, looksLikeId, number } = parseSearch('4812');
+    expect(filters.search).toBe('4812');
+    expect(filters.id).toBeUndefined();
     expect(looksLikeId).toBe(true);
-    expect(filters.search).toBeUndefined();
+    expect(number).toBe(4812);
   });
 
   it('treats free text as a search term, not an id', () => {
@@ -88,6 +100,58 @@ describe('parseSearch', () => {
     const { filters } = parseSearch('von:2026-09-01 bis:2026-09-30');
     expect(filters.dateFrom).toBe('2026-09-01');
     expect(filters.dateTo).toBe('2026-09-30');
+  });
+
+  it('accepts dates written the German way', () => {
+    const { filters } = parseSearch('von:1.9.2026 bis:30.09.26');
+    expect(filters.dateFrom).toBe('2026-09-01');
+    expect(filters.dateTo).toBe('2026-09-30');
+  });
+
+  it('flags a date it cannot read instead of filtering on it', () => {
+    const { filters, chips } = parseSearch('bis:31.02.2026');
+    expect(filters.dateTo).toBeUndefined();
+    expect(chips[0].invalid).toBe(true);
+  });
+});
+
+describe('parseDate', () => {
+  const today = new Date(2026, 10, 19);
+
+  it('fills in the current year for day and month alone', () => {
+    expect(parseDate('1.9.', today)).toBe('2026-09-01');
+  });
+
+  it('rejects impossible dates and other text', () => {
+    expect(parseDate('31.02.2026', today)).toBeNull();
+    expect(parseDate('gestern', today)).toBeNull();
+  });
+});
+
+describe('fieldsMatching', () => {
+  it('offers the field a typed word is the start of', () => {
+    expect(fieldsMatching('fi').map((f) => f.field)).toEqual(['firma']);
+    // Aliases lead to the same field.
+    expect(fieldsMatching('kun').map((f) => f.field)).toEqual(['firma']);
+  });
+
+  it('offers nothing for an ordinary word', () => {
+    expect(fieldsMatching('drucker')).toEqual([]);
+  });
+});
+
+describe('wordAt / replaceWord', () => {
+  it('finds the plain word under the caret and turns it into a term', () => {
+    const query = 'drucker müller';
+    const word = wordAt(query, query.length)!;
+    expect(word.text).toBe('müller');
+
+    const { text } = replaceWord(query, word, 'firma', 'Müller Logistik GmbH');
+    expect(text).toBe('drucker firma:"Müller Logistik GmbH"');
+  });
+
+  it('ignores field terms', () => {
+    expect(wordAt('firma:mül', 5)).toBeNull();
   });
 });
 

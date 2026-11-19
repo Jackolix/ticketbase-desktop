@@ -370,16 +370,20 @@ impl Store {
     /// typing `firma:` alone still offers something to pick from.
     pub fn search_customers(&self, query: &str, limit: i64) -> Result<Vec<Customer>, StoreError> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        let needle = query.trim().to_lowercase();
+        let needle = fold(query.trim());
+        // "mueller" for "Müller": the spelling people type when the keyboard
+        // or the habit has no umlauts. Falls back to the needle itself.
+        let alternative = transliterated(&needle).unwrap_or_else(|| needle.clone());
 
         let mut stmt = conn.prepare(
             "SELECT id, name, number, zip, location, passive FROM companies \
-             WHERE ?1 = '' OR ulower(name) LIKE ?2 OR ulower(number) LIKE ?2 \
+             WHERE ?1 = '' OR ufold(name) LIKE ?2 OR ufold(number) LIKE ?2 \
+                OR ufold(name) LIKE ?5 \
              ORDER BY \
                CASE WHEN ?1 = '' THEN 0 \
-                    WHEN ulower(name) = ?1 THEN 0 \
-                    WHEN ulower(name) LIKE ?3 THEN 1 \
-                    WHEN ulower(number) = ?1 THEN 1 \
+                    WHEN ufold(name) = ?1 THEN 0 \
+                    WHEN ufold(name) LIKE ?3 THEN 1 \
+                    WHEN ufold(number) = ?1 THEN 1 \
                     ELSE 2 END ASC, \
                passive ASC, \
                CASE WHEN ?1 = '' THEN 0 ELSE length(name) END ASC, \
@@ -388,7 +392,13 @@ impl Store {
         )?;
 
         let rows = stmt.query_map(
-            params![needle, format!("%{needle}%"), format!("{needle}%"), limit],
+            params![
+                needle,
+                format!("%{}%", escape_like(&needle)),
+                format!("{}%", escape_like(&needle)),
+                limit,
+                format!("%{}%", escape_like(&alternative)),
+            ],
             |row| {
                 Ok(Customer {
                     id: row.get(0)?,
@@ -427,17 +437,33 @@ impl Store {
             args.push(Box::new(i64::from(archived)));
         }
 
-        if let Some(search) = q.search.as_ref().filter(|s| !s.trim().is_empty()) {
-            let like = format!("%{}%", search.trim().to_lowercase());
-            clauses.push(
-                "(ulower(t.summary) LIKE ? OR ulower(t.description) LIKE ? \
-                  OR ulower(t.company_name) LIKE ? OR CAST(t.id AS TEXT) LIKE ? \
-                  OR ulower(t.template_data) LIKE ?)"
-                    .into(),
-            );
-            for _ in 0..5 {
-                args.push(Box::new(like.clone()));
+        // Free text is split into words and every word has to match somewhere,
+        // in any order. Matching the whole string as one substring meant
+        // "drucker offline" missed "Drucker EG rechts offline", which is not
+        // how anyone expects a search box to behave.
+        let words = q
+            .search
+            .as_deref()
+            .map(search_words)
+            .unwrap_or_default();
+
+        for word in &words {
+            let mut alternatives = vec![format!("{SEARCH_HAYSTACK} LIKE ? ESCAPE '\\'")];
+            args.push(Box::new(format!("%{}%", escape_like(&word.folded))));
+
+            if let Some(alt) = &word.transliterated {
+                alternatives.push(format!("{SEARCH_HAYSTACK} LIKE ? ESCAPE '\\'"));
+                args.push(Box::new(format!("%{}%", escape_like(alt))));
             }
+
+            // A number is most often a ticket number, possibly still being
+            // typed — so the id prefix matches too, narrowing as digits arrive.
+            if word.is_number {
+                alternatives.push("CAST(t.id AS TEXT) LIKE ?".into());
+                args.push(Box::new(format!("{}%", word.folded)));
+            }
+
+            clauses.push(format!("({})", alternatives.join(" OR ")));
         }
 
         if let Some(id) = q.id {
@@ -451,15 +477,21 @@ impl Store {
         }
 
         if let Some(name) = q.company_name.as_ref().filter(|s| !s.trim().is_empty()) {
-            clauses.push("ulower(t.company_name) LIKE ?".into());
-            args.push(Box::new(format!("%{}%", name.trim().to_lowercase())));
+            let needle = fold(name.trim());
+            let alt = transliterated(&needle).unwrap_or_else(|| needle.clone());
+            clauses.push(
+                "(ufold(t.company_name) LIKE ? ESCAPE '\\' OR ufold(t.company_name) LIKE ? ESCAPE '\\')"
+                    .into(),
+            );
+            args.push(Box::new(format!("%{}%", escape_like(&needle))));
+            args.push(Box::new(format!("%{}%", escape_like(&alt))));
         }
 
-        if let Some(status) = q.status.as_ref().filter(|s| !s.is_empty()) {
-            // Prefix match so `status:warten` finds every "Warten auf …" variant
-            // without the user typing the whole label.
-            clauses.push("ulower(t.status) LIKE ?".into());
-            args.push(Box::new(format!("{}%", status.to_lowercase())));
+        if let Some(status) = q.status.as_ref().filter(|s| !s.trim().is_empty()) {
+            // Anywhere in the label, so `status:warten` finds every "Warten auf …"
+            // variant and `status:rückmeldung` finds them too.
+            clauses.push("ufold(t.status) LIKE ? ESCAPE '\\'".into());
+            args.push(Box::new(format!("%{}%", escape_like(&fold(status.trim())))));
         }
 
         if let Some(priority) = q.priority.as_ref().filter(|s| !s.is_empty()) {
@@ -482,17 +514,54 @@ impl Store {
             sql.push_str(&clauses.join(" AND "));
         }
 
+        sql.push_str(" ORDER BY ");
+
+        // With free text, the best matches lead and the chosen sort orders
+        // within each tier: the ticket whose number was typed, then tickets
+        // whose title or customer contains every word, then those that only
+        // mention them somewhere in the description or form.
+        if !words.is_empty() {
+            let mut exact_id = Vec::new();
+            let mut in_title = Vec::new();
+
+            for word in &words {
+                if word.is_number {
+                    exact_id.push("t.id = ?".to_string());
+                    args.push(Box::new(word.folded.parse::<i64>().unwrap_or(-1)));
+                }
+            }
+            for word in &words {
+                let mut alternatives = vec![format!("{SEARCH_TITLE} LIKE ? ESCAPE '\\'")];
+                args.push(Box::new(format!("%{}%", escape_like(&word.folded))));
+                if let Some(alt) = &word.transliterated {
+                    alternatives.push(format!("{SEARCH_TITLE} LIKE ? ESCAPE '\\'"));
+                    args.push(Box::new(format!("%{}%", escape_like(alt))));
+                }
+                in_title.push(format!("({})", alternatives.join(" OR ")));
+            }
+
+            let exact_id = if exact_id.is_empty() {
+                "0".to_string()
+            } else {
+                exact_id.join(" OR ")
+            };
+            sql.push_str(&format!(
+                "CASE WHEN {exact_id} THEN 0 WHEN {} THEN 1 ELSE 2 END ASC, ",
+                in_title.join(" AND ")
+            ));
+        }
+
         sql.push_str(match q.sort {
-            TicketSort::DateDesc => " ORDER BY t.created_at_sortable DESC, t.id DESC",
-            TicketSort::DateAsc => " ORDER BY t.created_at_sortable ASC, t.id ASC",
-            TicketSort::PriorityHigh => " ORDER BY t.priority_index DESC, t.id DESC",
-            TicketSort::PriorityLow => " ORDER BY t.priority_index ASC, t.id DESC",
-            TicketSort::IdDesc => " ORDER BY t.id DESC",
-            TicketSort::IdAsc => " ORDER BY t.id ASC",
-            TicketSort::CompanyAsc => " ORDER BY t.company_name COLLATE NOCASE ASC, t.id DESC",
-            TicketSort::CompanyDesc => " ORDER BY t.company_name COLLATE NOCASE DESC, t.id DESC",
-            TicketSort::StatusAsc => " ORDER BY t.status COLLATE NOCASE ASC, t.id DESC",
-            TicketSort::StatusDesc => " ORDER BY t.status COLLATE NOCASE DESC, t.id DESC",
+            TicketSort::DateDesc => "t.created_at_sortable DESC, t.id DESC",
+            TicketSort::DateAsc => "t.created_at_sortable ASC, t.id ASC",
+            TicketSort::PriorityHigh => "t.priority_index DESC, t.id DESC",
+            TicketSort::PriorityLow => "t.priority_index ASC, t.id DESC",
+            TicketSort::IdDesc => "t.id DESC",
+            TicketSort::IdAsc => "t.id ASC",
+            TicketSort::CompanyAsc => "t.company_name COLLATE NOCASE ASC, t.id DESC",
+            TicketSort::CompanyDesc => "t.company_name COLLATE NOCASE DESC, t.id DESC",
+            TicketSort::StatusAsc => "t.status COLLATE NOCASE ASC, t.id DESC",
+            TicketSort::StatusDesc => "t.status COLLATE NOCASE DESC, t.id DESC",
         });
 
         if let Some(limit) = q.limit {
@@ -753,6 +822,120 @@ const TICKET_COLUMNS: &str = "t.id, t.description, t.status, t.status_id, t.summ
      t.location_id, t.dyn_template_id, t.company, t.created_at, t.ticket_start, \
      t.ticket_messages_count, t.template_data, t.form";
 
+/// Everything free-text search looks at, folded once per row.
+///
+/// The contact (`ticket_user`) and creator are in here because "the ticket
+/// from Frau Schneider" is a common way to remember one. The company's JSON
+/// blob is not: its key names ("companyMail" …) would make "mail" match every
+/// ticket.
+const SEARCH_HAYSTACK: &str = "ufold(t.summary || ' ' || t.subject || ' ' || t.company_name \
+     || ' ' || t.ticket_user || ' ' || t.ticket_creator || ' ' || t.pool_name || ' ' || t.status \
+     || ' ' || t.description || ' ' || t.template_data)";
+
+/// The part of a row a person reads first, for ranking.
+const SEARCH_TITLE: &str = "ufold(t.summary || ' ' || t.company_name || ' ' || t.subject)";
+
+/// One word of a free-text search, already folded.
+#[derive(Debug, PartialEq)]
+pub(crate) struct SearchWord {
+    pub folded: String,
+    /// The same word with `ae`/`oe`/`ue` read as umlauts, when that differs.
+    pub transliterated: Option<String>,
+    pub is_number: bool,
+}
+
+/// Splits free text into words. A quoted run stays one word, so
+/// `"rechts offline"` still asks for that exact phrase.
+pub(crate) fn search_words(input: &str) -> Vec<SearchWord> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+
+    let mut flush = |current: &mut String| {
+        let text = current.trim();
+        if !text.is_empty() {
+            let folded = fold(text);
+            words.push(SearchWord {
+                transliterated: transliterated(&folded),
+                is_number: folded.chars().all(|c| c.is_ascii_digit()) && folded.len() <= 12,
+                folded,
+            });
+        }
+        current.clear();
+    };
+
+    for c in input.chars() {
+        match c {
+            '"' => {
+                flush(&mut current);
+                quoted = !quoted;
+            }
+            c if c.is_whitespace() && !quoted => flush(&mut current),
+            c => current.push(c),
+        }
+    }
+    flush(&mut current);
+    words
+}
+
+/// Lowercases and strips accents, so "Müller", "MÜLLER" and "muller" compare
+/// equal and "Straße" matches "strasse".
+///
+/// Hand-rolled over the Latin letters that actually occur in this data rather
+/// than pulling in full Unicode normalisation for them.
+pub(crate) fn fold(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars().flat_map(char::to_lowercase) {
+        match c {
+            'ä' | 'à' | 'á' | 'â' | 'ã' | 'å' => out.push('a'),
+            'ö' | 'ò' | 'ó' | 'ô' | 'õ' | 'ø' => out.push('o'),
+            'ü' | 'ù' | 'ú' | 'û' => out.push('u'),
+            'é' | 'è' | 'ê' | 'ë' => out.push('e'),
+            'í' | 'ì' | 'î' | 'ï' => out.push('i'),
+            'ç' => out.push('c'),
+            'ñ' => out.push('n'),
+            'ß' => out.push_str("ss"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// "mueller" → "muller", which is what "Müller" folds to.
+///
+/// Only after a consonant (or at the start), so "neue" and "steuer" — whose
+/// "ue" is no umlaut — are left alone. Returns `None` when nothing changed.
+pub(crate) fn transliterated(folded: &str) -> Option<String> {
+    let chars: Vec<char> = folded.chars().collect();
+    let mut out = String::with_capacity(folded.len());
+    let mut changed = false;
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        let after_consonant = i == 0 || !"aeiouy".contains(chars[i - 1]);
+        if matches!(c, 'a' | 'o' | 'u') && next == Some('e') && after_consonant {
+            out.push(c);
+            i += 2;
+            changed = true;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+
+    changed.then_some(out)
+}
+
+/// Escapes LIKE's wildcards, for patterns written `LIKE ? ESCAPE '\'`.
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn row_to_ticket(row: &rusqlite::Row) -> Result<Ticket, rusqlite::Error> {
     let attachments: String = row.get(14)?;
     let company: String = row.get(18)?;
@@ -806,6 +989,13 @@ fn register_unicode_lower(conn: &Connection) -> Result<(), StoreError> {
                 .map(str::to_lowercase)
                 .unwrap_or_default())
         },
+    )?;
+    // `ufold(text)`: lowercased and stripped of accents, see `fold`.
+    conn.create_scalar_function(
+        "ufold",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| Ok(ctx.get_raw(0).as_str().map(fold).unwrap_or_default()),
     )?;
     Ok(())
 }

@@ -14,6 +14,7 @@ import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 
 import { makeSampleScreenshot } from './sampleImage';
 import { makeSamplePdf } from './samplePdf';
+import { containsAll, fold, searchWords } from '@/lib/searchHighlight';
 
 const COMPANIES = [
   { id: 8, name: 'Müller Logistik GmbH', number: 'K-1042' },
@@ -256,23 +257,33 @@ function makeArchivedTicket(i: number, companyIndex: number) {
 function matches(ticket: ReturnType<typeof makeTicket>, query: Record<string, unknown>) {
   if (query.id && ticket.id !== query.id) return false;
 
+  // Mirrors the store: every word somewhere, accents folded, numbers also as
+  // a ticket-number prefix.
   if (query.search) {
-    const needle = String(query.search).toLowerCase();
-    const haystack = [ticket.summary, ticket.description, ticket.company.name, String(ticket.id)]
-      .join(' ')
-      .toLowerCase();
-    if (!haystack.includes(needle)) return false;
+    const haystack = [
+      ticket.summary,
+      ticket.subject,
+      ticket.company.name,
+      ticket.ticketUser,
+      ticket.ticketCreator,
+      ticket.pool_name,
+      ticket.status,
+      ticket.description,
+      ticket.template_data,
+    ].join(' ');
+    for (const word of searchWords(String(query.search))) {
+      const byNumber = /^\d+$/.test(word) && String(ticket.id).startsWith(word);
+      if (!byNumber && !containsAll(haystack, [word])) return false;
+    }
   }
 
   if (query.companyId && ticket.company.id !== query.companyId) return false;
 
-  if (query.companyName) {
-    if (!ticket.company.name.toLowerCase().includes(String(query.companyName).toLowerCase())) {
-      return false;
-    }
+  if (query.companyName && !containsAll(ticket.company.name, [String(query.companyName)])) {
+    return false;
   }
 
-  if (query.status && !ticket.status.toLowerCase().startsWith(String(query.status).toLowerCase())) {
+  if (query.status && !fold(ticket.status).includes(fold(String(query.status)))) {
     return false;
   }
 
@@ -317,7 +328,7 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
     return CUSTOMERS.filter(
       (c) =>
         !needle ||
-        c.name.toLowerCase().includes(needle) ||
+        containsAll(c.name, [needle]) ||
         c.number.toLowerCase().includes(needle),
     )
       .sort(
@@ -424,6 +435,11 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   sync_set_interval: () => null,
   open_ticket_window: () => null,
   show_ticket: () => null,
+  // The notification hub keeps nothing in preview.
+  notifications_list: () => [],
+  notifications_add: ({ notification }: any) => ({ id: 1, read: false, createdAt: Date.now(), body: '', ...notification }),
+  notifications_mark_read: () => null,
+  notifications_clear: () => null,
 
   /**
    * The updater, behind `?preview=1&update=1`.

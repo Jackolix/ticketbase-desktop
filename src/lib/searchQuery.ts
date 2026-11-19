@@ -6,14 +6,14 @@ import type { TicketQuery, TicketSort } from '@/lib/sync';
  * Everything runs against the local SQLite store, so filters can be expressed
  * inline instead of through a row of dropdowns:
  *
- *   4812                      → the ticket with that id
- *   id:4812                   → same, explicit
+ *   4812                      → that ticket first, then anything mentioning 4812
+ *   id:4812                   → exactly that ticket
  *   firma:müller              → tickets for a company whose name contains that
  *   status:warten             → any status starting "Warten …"
  *   prio:hoch                 → priority
- *   von:2026-09-01            → created on or after
- *   bis:2026-09-30            → created on or before
- *   exchange mail             → free text over summary, description, company
+ *   von:1.9.2026              → created on or after (also 2026-09-01, 1.9.)
+ *   bis:30.09.2026            → created on or before
+ *   exchange mail             → every word, in any order, anywhere in the ticket
  *
  * Terms combine, and anything not recognised as a field falls through to free
  * text — so a stray colon never swallows the query.
@@ -29,8 +29,14 @@ export interface ParsedSearch {
   filters: Omit<TicketQuery, 'bucket' | 'sort' | 'limit' | 'offset'>;
   /** The recognised field terms, for rendering as removable chips. */
   chips: SearchChip[];
-  /** True when a bare number was read as a ticket id. */
+  /** True when the free text is a bare number, most likely a ticket number. */
   looksLikeId: boolean;
+  /**
+   * That number, when `looksLikeId`. It is searched as text too — "214" is as
+   * likely a phone extension as a ticket — but it is what a lookup of a ticket
+   * the store does not have should ask the backend for.
+   */
+  number?: number;
 }
 
 export interface SearchChip {
@@ -38,6 +44,8 @@ export interface SearchChip {
   raw: string;
   field: string;
   value: string;
+  /** Set when the value could not be understood, so it filters nothing. */
+  invalid?: boolean;
 }
 
 /** German-first, with English aliases, since the backend data is German. */
@@ -84,6 +92,7 @@ export function parseSearch(input: string): ParsedSearch {
 
     const value = unquote(rawValue);
     if (!value) continue;
+    let invalid = false;
 
     switch (field) {
       case 'id': {
@@ -102,33 +111,69 @@ export function parseSearch(input: string): ParsedSearch {
         filters.status = value;
         break;
       case 'dateFrom':
-        filters.dateFrom = value;
+      case 'dateTo': {
+        const iso = parseDate(value);
+        if (iso) filters[field] = iso;
+        else invalid = true;
         break;
-      case 'dateTo':
-        filters.dateTo = value;
-        break;
+      }
       default:
         // Every alias target is handled above; anything else is a mapping bug.
         continue;
     }
 
-    chips.push({ raw, field: rawField.toLowerCase(), value });
+    chips.push({ raw, field: rawField.toLowerCase(), value, ...(invalid ? { invalid } : {}) });
     free = free.replace(raw, ' ');
   }
 
   const text = free.trim().replace(/\s+/g, ' ');
 
+  let number: number | undefined;
+
   if (text) {
-    // A bare number is almost always a ticket id being pasted in.
+    filters.search = text;
+    // A bare number is usually a ticket number being pasted in. It is still
+    // searched as text; this only marks it for a lookup if no ticket has it.
     if (/^\d{2,}$/.test(text) && filters.id === undefined) {
-      filters.id = parseInt(text, 10);
+      number = parseInt(text, 10);
       looksLikeId = true;
-    } else {
-      filters.search = text;
     }
   }
 
-  return { filters, chips, looksLikeId };
+  return { filters, chips, looksLikeId, ...(number !== undefined ? { number } : {}) };
+}
+
+/**
+ * Reads a date the way people type one here — `1.9.2026`, `01.09.26`, `1.9.`
+ * for this year — or as ISO. Returns `YYYY-MM-DD`, or null if it is not a real
+ * date, so `bis:31.02.` filters nothing instead of everything.
+ */
+export function parseDate(value: string, today: Date = new Date()): string | null {
+  let year: number;
+  let month: number;
+  let day: number;
+
+  const iso = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const german = value.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})?$/);
+
+  if (iso) {
+    [year, month, day] = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+  } else if (german) {
+    day = Number(german[1]);
+    month = Number(german[2]);
+    year = german[3] ? Number(german[3]) : today.getFullYear();
+    if (german[3]?.length === 2) year += 2000;
+  } else {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${year}-${pad(month)}-${pad(day)}`;
 }
 
 function unquote(value: string): string {
@@ -258,13 +303,59 @@ export function setTermValue(
 
 /** Field names offered as completions in the search box. */
 export const SEARCH_FIELDS: Array<{ field: string; hint: string }> = [
-  { field: 'id', hint: 'Ticketnummer' },
   { field: 'firma', hint: 'Kunde — mit Vorschlägen' },
-  { field: 'status', hint: 'z. B. offen, warten' },
-  { field: 'prio', hint: 'hoch, normal' },
-  { field: 'von', hint: 'JJJJ-MM-TT' },
-  { field: 'bis', hint: 'JJJJ-MM-TT' },
+  { field: 'status', hint: 'z. B. neu, warten, prüfen' },
+  { field: 'prio', hint: 'sehr hoch, hoch, normal, niedrig' },
+  { field: 'von', hint: 'erstellt ab, z. B. 1.9.2026' },
+  { field: 'bis', hint: 'erstellt bis, z. B. 30.9.' },
+  { field: 'id', hint: 'genau diese Ticketnummer' },
 ];
+
+/**
+ * Fields whose name starts with what has been typed, so `fi` offers `firma:`.
+ * Aliases count, so `kunde` does too.
+ */
+export function fieldsMatching(prefix: string): Array<{ field: string; hint: string }> {
+  const needle = prefix.toLowerCase();
+  if (!needle) return [];
+  return SEARCH_FIELDS.filter(({ field }) => {
+    const target = FIELD_ALIASES[field];
+    return Object.entries(FIELD_ALIASES).some(
+      ([alias, mapped]) => mapped === target && alias.startsWith(needle) && alias !== needle,
+    );
+  });
+}
+
+/**
+ * The free-text word the caret sits in, if any — for offering "did you mean
+ * the customer …?" while someone types a plain word.
+ */
+export function wordAt(
+  input: string,
+  caret: number,
+): { text: string; start: number; end: number } | null {
+  const position = Math.max(0, Math.min(caret, input.length));
+  for (const token of tokenize(input)) {
+    if (position < token.start || position > token.end) continue;
+    if (token.text.includes(':') || /^["']/.test(token.text)) return null;
+    return token;
+  }
+  return null;
+}
+
+/** Replaces a free-text word with a field term, quoting as `setTermValue` does. */
+export function replaceWord(
+  input: string,
+  word: { start: number; end: number },
+  field: string,
+  value: string,
+): { text: string; caret: number } {
+  return setTermValue(
+    input,
+    { field, filter: null, value: '', start: word.start, end: word.end },
+    value,
+  );
+}
 
 /** Priority values offered while typing `prio:`. */
 export const PRIORITY_SUGGESTIONS: Array<{ value: string; label: string }> = [

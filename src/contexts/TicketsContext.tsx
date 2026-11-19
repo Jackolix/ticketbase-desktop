@@ -184,13 +184,18 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
 
   // The board expresses every filter through the search box, so the store
   // query is derived by parsing it rather than read from a row of dropdowns.
+  const parsedSearch = useMemo(() => parseSearch(filterState.searchTerm), [filterState.searchTerm]);
+
   const baseQuery: Omit<TicketQuery, 'bucket'> = useMemo(
     () => ({
-      ...parseSearch(filterState.searchTerm).filters,
+      ...parsedSearch.filters,
       sort: filterState.sortBy,
     }),
-    [filterState.searchTerm, filterState.sortBy],
+    [parsedSearch, filterState.sortBy],
   );
+
+  /** The ticket number the search names, explicitly (`id:`) or as a bare number. */
+  const wantedNumber = parsedSearch.filters.id ?? parsedSearch.number;
 
   const loadFromStore = useCallback(async () => {
     const token = ++queryToken.current;
@@ -229,6 +234,10 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
     void loadFromStore();
   }, [loadFromStore]);
 
+  /** The current `loadFromStore`, for async work that outlives a filter change. */
+  const loadLatest = useRef(loadFromStore);
+  loadLatest.current = loadFromStore;
+
   /**
    * Resolves a ticket number the store does not know.
    *
@@ -243,40 +252,51 @@ export function TicketsProvider({ children }: { children: React.ReactNode }) {
   const attemptedNumbers = useRef(new Set<number>());
 
   useEffect(() => {
-    const wanted = baseQuery.id;
+    const wanted = wantedNumber;
     if (wanted === undefined || attemptedNumbers.current.has(wanted)) return;
 
-    // Only when nothing local matched; a ticket already on screen needs no
-    // request, and this must not fire while the first query is still running.
+    // Only when no local ticket has that number; a ticket already on screen
+    // needs no request, and this must not fire while the first query runs.
+    // Other rows may well match — "4812" can appear in a description — so the
+    // check is for that exact ticket, not for an empty list.
     if (isLoading) return;
-    const found =
-      tickets.my_tickets.length +
-      tickets.new_tickets.length +
-      tickets.all_tickets.length +
-      tickets.archive_tickets.length;
-    if (found > 0) return;
+    const all = [
+      tickets.my_tickets,
+      tickets.new_tickets,
+      tickets.all_tickets,
+      tickets.archive_tickets,
+    ];
+    if (all.some((list) => list.some((ticket) => ticket.id === wanted))) return;
 
     let cancelled = false;
-    attemptedNumbers.current.add(wanted);
-    setIsLookingUpNumber(true);
+    // Wait until the number has stopped changing. Typing 4-8-1-2 slowly would
+    // otherwise ask the backend for 48, 481 and 4812 in turn.
+    const timer = window.setTimeout(() => {
+      attemptedNumbers.current.add(wanted);
+      setIsLookingUpNumber(true);
 
-    void (async () => {
-      try {
-        const ticket = await fetchTicketByNumber(wanted);
-        if (!cancelled && ticket) await loadFromStore();
-      } catch (error) {
-        // A failed lookup leaves the empty state in place, which already says
-        // the right thing. Nothing here is worth interrupting a search over.
-        console.error(`Failed to look up ticket ${wanted}:`, error);
-      } finally {
-        if (!cancelled) setIsLookingUpNumber(false);
-      }
-    })();
+      void (async () => {
+        try {
+          const ticket = await fetchTicketByNumber(wanted);
+          // Reload even if the search moved on meanwhile: the ticket is in the
+          // store now, and a stale list would hide it until the next sync.
+          if (ticket) await loadLatest.current();
+        } catch (error) {
+          // A failed lookup leaves the empty state in place, which already says
+          // the right thing. Nothing here is worth interrupting a search over.
+          console.error(`Failed to look up ticket ${wanted}:`, error);
+        } finally {
+          if (!cancelled) setIsLookingUpNumber(false);
+        }
+      })();
+    }, 500);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      setIsLookingUpNumber(false);
     };
-  }, [baseQuery.id, isLoading, tickets, loadFromStore]);
+  }, [wantedNumber, isLoading, tickets]);
 
   const loadCompanyArchive = useCallback(
     async (company: Customer) => {

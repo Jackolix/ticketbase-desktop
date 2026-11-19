@@ -906,3 +906,150 @@ fn notifications_are_capped_and_cleared_with_the_session() {
     store.clear().unwrap();
     assert!(store.notifications(10).unwrap().is_empty());
 }
+
+// --------------------------------------------------------------------------
+// Free-text search: words in any order, accents folded, best matches first.
+// --------------------------------------------------------------------------
+
+fn search(store: &Store, text: &str) -> Vec<i64> {
+    store
+        .query(&TicketQuery {
+            search: Some(text.into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect()
+}
+
+#[test]
+fn every_word_has_to_match_but_not_in_order_or_next_to_each_other() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_all(
+            &[],
+            &[
+                ticket(1, "Drucker EG rechts offline nach Update"),
+                ticket(2, "Drucker tauschen"),
+            ],
+            &[],
+            1,
+        )
+        .unwrap();
+
+    assert_eq!(search(&store, "drucker offline"), vec![1]);
+    assert_eq!(search(&store, "offline drucker"), vec![1]);
+    // A quoted phrase is still one word.
+    assert_eq!(search(&store, "\"rechts offline\""), vec![1]);
+    assert!(search(&store, "\"offline rechts\"").is_empty());
+}
+
+#[test]
+fn search_ignores_accents_and_accepts_spelled_out_umlauts() {
+    let store = Store::open_in_memory().unwrap();
+    let mut street = ticket(2, "Zugang Hauptstraße");
+    street.company.name = "Stadtwerke".into();
+    street.ticket_user = "Frau Schneider".into();
+    store.replace_all(&[], &[ticket(1, "x"), street], &[], 1).unwrap();
+
+    // Ticket 1 belongs to "Müller Logistik".
+    assert_eq!(search(&store, "muller"), vec![1]);
+    assert_eq!(search(&store, "mueller"), vec![1]);
+    assert_eq!(search(&store, "hauptstrasse"), vec![2]);
+}
+
+#[test]
+fn search_reaches_the_contact_person() {
+    let store = Store::open_in_memory().unwrap();
+    store.replace_all(&[], &[ticket(1, "x")], &[], 1).unwrap();
+    // `ticket()` sets ticket_user to "Jonas Müller".
+    assert_eq!(search(&store, "jonas"), vec![1]);
+}
+
+#[test]
+fn a_number_matches_the_ticket_number_and_text_and_the_exact_ticket_leads() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_all(
+            &[],
+            &[
+                with_date(214, "01-01-2026 08:00"),
+                Ticket {
+                    created_at: "05-01-2026 08:00".into(),
+                    ..ticket(900, "Durchwahl 214 klingelt nicht")
+                },
+                Ticket {
+                    created_at: "09-01-2026 08:00".into(),
+                    ..ticket(2145, "y")
+                },
+                ticket(77, "unrelated"),
+            ],
+            &[],
+            1,
+        )
+        .unwrap();
+
+    // The exact number leads, then the ticket that says it in its title,
+    // then the one whose number merely starts with it.
+    assert_eq!(search(&store, "214"), vec![214, 900, 2145]);
+}
+
+#[test]
+fn title_matches_rank_above_description_matches() {
+    let store = Store::open_in_memory().unwrap();
+    let mut only_body = Ticket {
+        created_at: "09-01-2026 08:00".into(),
+        ..ticket(1, "Allgemeine Anfrage")
+    };
+    only_body.description = "Der Scanner im Keller geht nicht".into();
+    let in_title = Ticket {
+        created_at: "01-01-2026 08:00".into(),
+        ..ticket(2, "Scanner defekt")
+    };
+    store.replace_all(&[], &[only_body, in_title], &[], 1).unwrap();
+
+    assert_eq!(search(&store, "scanner"), vec![2, 1]);
+}
+
+#[test]
+fn like_wildcards_in_the_query_are_taken_literally() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_all(&[], &[ticket(1, "100% CPU"), ticket(2, "1000 Seiten")], &[], 1)
+        .unwrap();
+    assert_eq!(search(&store, "100%"), vec![1]);
+}
+
+#[test]
+fn status_filter_matches_anywhere_in_the_label() {
+    let store = Store::open_in_memory().unwrap();
+    let mut waiting = ticket(2, "waiting");
+    waiting.status = "Warten auf Rückmeldung (extern)".into();
+    store.replace_all(&[], &[ticket(1, "a"), waiting], &[], 1).unwrap();
+
+    let found = store
+        .query(&TicketQuery {
+            status: Some("ruckmeldung".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(found.iter().map(|t| t.id).collect::<Vec<_>>(), vec![2]);
+}
+
+#[test]
+fn customer_search_accepts_spelled_out_umlauts() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .replace_customers(&[customer(1, "Müller Logistik GmbH", "K-1042")], 1)
+        .unwrap();
+    assert_eq!(store.search_customers("mueller", 10).unwrap().len(), 1);
+    assert_eq!(store.search_customers("muller", 10).unwrap().len(), 1);
+}
+
+#[test]
+fn transliteration_leaves_real_ue_alone() {
+    assert_eq!(transliterated("mueller").as_deref(), Some("muller"));
+    assert_eq!(transliterated("neue"), None);
+    assert_eq!(transliterated("steuer"), None);
+}
