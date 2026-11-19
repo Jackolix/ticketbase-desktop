@@ -16,7 +16,9 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
+import { forwardStatus, useSaveStatuses } from '@/lib/saveStatuses';
 import { syncRefresh } from '@/lib/sync';
+import { saveWorkEntry, WorkEntryError } from '@/lib/workEntry';
 import type { Ticket, User } from '@/types/api';
 
 interface ForwardTicketDialogProps {
@@ -30,10 +32,14 @@ interface ForwardTicketDialogProps {
 /**
  * Forwards a ticket to a colleague.
  *
- * There is no dedicated forward endpoint, but saveVerlaufApi does the job: with
- * status_id 2 (Terminiert) plus retermUserId and retermDate it reassigns
- * my_ticket_id, creates the Ticketterminieren record, and sends the colleague
- * the "Weitergeleitet" mail. The desktop app simply never called it that way.
+ * There is no dedicated forward endpoint: forwarding is a work entry saved
+ * with the "assigned" status from the server's catalog plus retermUserId. That
+ * reassigns my_ticket_id, creates the appointment record (dated now) and sends
+ * the colleague the "Weitergeleitet" mail. Like every work entry it goes
+ * through the timer and books time (see workEntry.ts), so the dialog asks for
+ * the minutes; without them the server would round up to a full block.
+ * Only the ticket's owner can forward: for anyone else the server saves a
+ * help entry and leaves the ticket alone.
  *
  * The colleague list comes from getLocationUsers on the current user's own
  * location — the people at your location are your team. That is the only user
@@ -55,7 +61,10 @@ export function ForwardTicketDialog({
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [note, setNote] = useState('');
+  const [minutes, setMinutes] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const status = forwardStatus(useSaveStatuses());
+  const minutesValue = parseInt(minutes, 10) || 0;
 
   const loadColleagues = useCallback(async () => {
     if (!user) return;
@@ -79,6 +88,7 @@ export function ForwardTicketDialog({
     setSearch('');
     setSelectedId(null);
     setNote('');
+    setMinutes('');
     void loadColleagues();
   }, [open, loadColleagues]);
 
@@ -94,33 +104,28 @@ export function ForwardTicketDialog({
     if (!user || selectedId == null) return;
 
     const target = colleagues.find((c) => c.id === selectedId);
+    if (!status || minutesValue <= 0) return;
+
     setIsSending(true);
     try {
-      const response = await apiClient.saveTicketHistory({
-        ticket_id: ticket.id,
-        user_id: user.id,
-        verlauf_text: note.trim() || `Ticket weitergeleitet an ${target?.name ?? 'Kollegen'}.`,
-        // 2 = Terminiert. This branch is what performs the reassignment.
-        status_id: 2,
-        sendMail: 0,
-        retermUserId: selectedId,
-        retermDate: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      await saveWorkEntry({
+        ticketId: ticket.id,
+        userId: user.id,
+        text: note.trim() || `Ticket weitergeleitet an ${target?.name ?? 'Kollegen'}.`,
+        statusId: status.id,
+        minutes: minutesValue,
+        assigneeId: selectedId,
       });
 
-      if (response.status === 'success') {
-        toast.success(`Ticket #${ticket.id} an ${target?.name ?? 'Kollegen'} weitergeleitet`);
-        onOpenChange(false);
-        await syncRefresh();
-        onForwarded?.();
-      } else {
-        toast.error('Ticket konnte nicht weitergeleitet werden', {
-          description: response.message,
-        });
-      }
+      toast.success(`Ticket #${ticket.id} an ${target?.name ?? 'Kollegen'} weitergeleitet`);
+      onOpenChange(false);
+      await syncRefresh();
+      onForwarded?.();
     } catch (error) {
       console.error('Failed to forward ticket:', error);
       toast.error('Ticket konnte nicht weitergeleitet werden', {
-        description: 'Verbindung prüfen und erneut versuchen.',
+        description:
+          error instanceof WorkEntryError ? error.message : 'Verbindung prüfen und erneut versuchen.',
       });
     } finally {
       setIsSending(false);
@@ -133,8 +138,8 @@ export function ForwardTicketDialog({
         <DialogHeader>
           <DialogTitle>Ticket #{ticket.id} weiterleiten</DialogTitle>
           <DialogDescription>
-            Der Kollege wird zugewiesen, das Ticket auf „Terminiert“ gesetzt und per E-Mail
-            informiert.
+            Der Kollege wird zugewiesen, das Ticket auf „{status?.name ?? 'Zugewiesen'}“ gesetzt
+            und per E-Mail informiert. Dabei wird ein Arbeitseintrag mit deiner Zeit gespeichert.
           </DialogDescription>
         </DialogHeader>
 
@@ -212,6 +217,22 @@ export function ForwardTicketDialog({
               className="text-xs"
             />
           </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="forward-minutes" className="text-xs">
+              Gebuchte Zeit (Min.)
+            </Label>
+            <Input
+              id="forward-minutes"
+              type="number"
+              min="1"
+              required
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value)}
+              placeholder="z. B. 5"
+              className="h-8 w-[120px] text-xs"
+            />
+          </div>
         </div>
 
         <DialogFooter>
@@ -221,7 +242,7 @@ export function ForwardTicketDialog({
           <Button
             size="sm"
             onClick={handleForward}
-            disabled={isSending || selectedId == null}
+            disabled={isSending || selectedId == null || minutesValue <= 0 || !status}
             className="gap-1.5"
           >
             {isSending ? (

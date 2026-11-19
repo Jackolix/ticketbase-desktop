@@ -7,13 +7,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { parseTicketDate } from '@/lib/ticketDate';
-import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
-import { toPlayerState, type PlayerState } from '@/lib/playerStatus';
+import { STOP, toPlayerState, type PlayerState } from '@/lib/playerStatus';
+import { isSaveStatusComplete, useSaveStatuses } from '@/lib/saveStatuses';
 import { timerRecord, timerStatus, type Timer } from '@/lib/sync';
+import { saveWorkEntry, toServerDateTime, WorkEntryError } from '@/lib/workEntry';
+import { SaveStatusFields } from './SaveStatusFields';
 import { Ticket } from '@/types/api';
 import {
   Play,
@@ -73,8 +74,17 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
   const [isBusy, setIsBusy] = useState(false);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [stopMessage, setStopMessage] = useState('');
-  const [stopStatus, setStopStatus] = useState('4'); // Abgeschlossen
+  // Empty until the status list loads; SaveStatusFields then picks its default.
+  const [stopStatus, setStopStatus] = useState('');
+  const [stopAppointment, setStopAppointment] = useState('');
   const [customTime, setCustomTime] = useState('');
+  const saveStatuses = useSaveStatuses();
+  /**
+   * The server timer is stopped but no entry was saved — a save attempt failed
+   * after the stop. The server only accepts an entry in this state, so the
+   * finish dialog must stay reachable instead of offering "Starten".
+   */
+  const [stoppedUnsaved, setStoppedUnsaved] = useState(false);
 
   // Mirrors the computation in the Rust store, so a tick between polls shows
   // the same number a fresh read would.
@@ -98,6 +108,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
 
     let serverState: PlayerState = 'stopped';
     let serverMinutes = 0;
+    let unsaved = false;
 
     try {
       const response = await apiClient.getPlayerStatus(ticket.id, userId);
@@ -107,6 +118,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
       if (data) {
         serverState = toPlayerState(data.play_status);
         serverMinutes = data.total_time || 0;
+        unsaved = data.play_status === STOP;
       }
     } catch (error) {
       // A failed poll must not reset a running timer — that would look like
@@ -116,9 +128,23 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
     }
 
     setPlayerState(serverState);
+    setStoppedUnsaved(unsaved);
     setNowMs(Date.now());
 
     try {
+      if (unsaved) {
+        // Keep the measured time on screen for the retry, but frozen.
+        const local = await timerStatus(ticket.id);
+        if (local === null) {
+          setIsApproximate(true);
+          await timerRecord(ticket.id, 'resume', serverMinutes * 60_000);
+          setTimer(await timerRecord(ticket.id, 'pause'));
+        } else {
+          setTimer(local.running ? await timerRecord(ticket.id, 'pause') : local);
+        }
+        return;
+      }
+
       if (serverState === 'stopped') {
         await timerRecord(ticket.id, 'clear');
         setTimer(null);
@@ -262,54 +288,52 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
     run(async () => {
       if (!userId || !stopMessage.trim()) return;
 
+      const status = saveStatuses.find((s) => String(s.id) === stopStatus);
+      if (!status) return;
+
       try {
         const trackedMinutes = Math.ceil(elapsedMs / 60_000);
         const submittedMinutes = parseInt(customTime, 10) || 0;
 
-        // Record a manual correction only when the technician actually changed
-        // the number; saveVerlaufApi reads the correction back out.
-        if (submittedMinutes > 0 && submittedMinutes !== trackedMinutes) {
-          await apiClient.correctWatch({
-            ticket_id: ticket.id,
-            user_id: userId,
-            old_time: trackedMinutes,
-            new_time: submittedMinutes,
-          });
-        }
-
-        // Deliberately no call to /stop. saveVerlaufApi ends with
-        // resetWorkStatus(), which clears the player state itself — and /stop
-        // only acts when it receives a current_state, which this client does
-        // not send. Calling it would be a no-op at best.
-        const response = await apiClient.saveTicketHistory({
-          ticket_id: ticket.id,
-          user_id: userId,
-          verlauf_text: stopMessage,
-          status_id: parseInt(stopStatus, 10),
-          sendMail: 0,
+        await saveWorkEntry({
+          ticketId: ticket.id,
+          userId,
+          text: stopMessage,
+          statusId: status.id,
+          // A correction only when the technician actually changed the number;
+          // otherwise the server books its own measurement.
+          ...(submittedMinutes > 0 &&
+            submittedMinutes !== trackedMinutes && {
+              minutes: submittedMinutes,
+              measuredMinutes: trackedMinutes,
+            }),
+          ...(status.requires_date && {
+            assigneeId: userId,
+            appointment: toServerDateTime(new Date(stopAppointment)),
+          }),
         });
 
-        if (response.status !== 'success') {
-          toast.error('Arbeit konnte nicht gespeichert werden', {
-            description: response.message || 'Der Server hat den Eintrag abgelehnt.',
-          });
-          return;
-        }
-
         setPlayerState('stopped');
+        setStoppedUnsaved(false);
         await timerRecord(ticket.id, 'clear');
         setTimer(null);
         setIsApproximate(false);
         setIsStopDialogOpen(false);
         setStopMessage('');
+        setStopAppointment('');
         setCustomTime('');
         toast.success(`${submittedMinutes || trackedMinutes} Min. auf Ticket #${ticket.id} gebucht`);
         onStatusChange?.();
       } catch (error) {
         console.error('Failed to stop ticket and save work:', error);
         toast.error('Arbeit konnte nicht gespeichert werden', {
-          description: 'Es wurde nichts gebucht. Verbindung prüfen und erneut versuchen.',
+          description:
+            error instanceof WorkEntryError
+              ? error.message
+              : 'Es wurde nichts gebucht. Verbindung prüfen und erneut versuchen.',
         });
+        // The timer may now be stopped server-side; show that state.
+        await refreshStatus();
       }
     });
 
@@ -343,8 +367,10 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
           <div className="text-3xl font-mono font-bold tabular-nums">
             {formatDuration(elapsedMs)}
           </div>
-          <p className="text-sm text-muted-foreground">{STATUS_HINT[playerState]}</p>
-          {isApproximate && playerState !== 'stopped' && (
+          <p className="text-sm text-muted-foreground">
+            {stoppedUnsaved ? 'Gestoppt — Arbeit noch nicht gespeichert' : STATUS_HINT[playerState]}
+          </p>
+          {isApproximate && (playerState !== 'stopped' || stoppedUnsaved) && (
             <p className="mt-1 text-xs text-muted-foreground">
               Vor dieser Sitzung gestartet — die Zeit ist ein Mindestwert.
             </p>
@@ -352,7 +378,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
         </div>
 
         <div className="flex justify-center gap-2">
-          {playerState === 'stopped' && (
+          {playerState === 'stopped' && !stoppedUnsaved && (
             <Button onClick={handlePlay} disabled={isBusy} className="flex items-center gap-2">
               {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Starten
@@ -378,7 +404,7 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
             </Button>
           )}
 
-          {playerState !== 'stopped' && (
+          {(playerState !== 'stopped' || stoppedUnsaved) && (
             <Dialog open={isStopDialogOpen} onOpenChange={setIsStopDialogOpen}>
               <DialogTrigger asChild>
                 <Button
@@ -406,21 +432,12 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                       rows={4}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="ticket-status">Neuer Ticketstatus</Label>
-                    <Select value={stopStatus} onValueChange={setStopStatus}>
-                      <SelectTrigger id="ticket-status">
-                        <SelectValue placeholder="Status wählen" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {TICKET_STATUS_OPTIONS.map((option) => (
-                          <SelectItem key={option.id} value={option.id}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <SaveStatusFields
+                    statusId={stopStatus}
+                    onStatusChange={setStopStatus}
+                    appointment={stopAppointment}
+                    onAppointmentChange={setStopAppointment}
+                  />
                   <div className="space-y-2">
                     <Label htmlFor="custom-time">Zu buchende Zeit (Minuten)</Label>
                     <Input
@@ -444,7 +461,14 @@ export function TicketPlayerControls({ ticket, onStatusChange }: TicketPlayerCon
                   >
                     Abbrechen
                   </Button>
-                  <Button onClick={handleStop} disabled={isBusy || !stopMessage.trim()}>
+                  <Button
+                    onClick={handleStop}
+                    disabled={
+                      isBusy ||
+                      !stopMessage.trim() ||
+                      !isSaveStatusComplete(saveStatuses, stopStatus, stopAppointment)
+                    }
+                  >
                     {isBusy ? (
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     ) : (

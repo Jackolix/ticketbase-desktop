@@ -31,13 +31,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { RelatedTickets } from './RelatedTickets';
 import { useHotkey } from '@/hooks/useHotkey';
@@ -49,7 +42,9 @@ import { syncRefresh } from '@/lib/sync';
 import { parseTicketDate } from '@/lib/ticketDate';
 import { normalizeTicketText, splitQuotedReply } from '@/lib/richText';
 import { parseTemplateData } from '@/lib/templateData';
-import { TICKET_STATUS_OPTIONS } from '@/lib/ticketStatusOptions';
+import { isSaveStatusComplete, useSaveStatuses } from '@/lib/saveStatuses';
+import { saveWorkEntry, toServerDateTime, WorkEntryError } from '@/lib/workEntry';
+import { SaveStatusFields } from './SaveStatusFields';
 import { TONE_BADGE, priorityLabel, priorityTone, statusTone } from '@/lib/ticketStatus';
 import { WindowManager } from '@/lib/windowManager';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
@@ -100,8 +95,11 @@ export function TicketDetail({
   const [isAddingTodo, setIsAddingTodo] = useState(false);
 
   const [entryText, setEntryText] = useState('');
-  const [entryStatus, setEntryStatus] = useState('3');
+  // Empty until the status list loads; SaveStatusFields then picks its default.
+  const [entryStatus, setEntryStatus] = useState('');
+  const [entryAppointment, setEntryAppointment] = useState('');
   const [entryMinutes, setEntryMinutes] = useState('');
+  const saveStatuses = useSaveStatuses();
   const [isSavingEntry, setIsSavingEntry] = useState(false);
 
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
@@ -218,42 +216,48 @@ export function TicketDetail({
     }
   };
 
+  /**
+   * A manual entry. The server only saves entries through the timer, so this
+   * starts and stops one (or stops the one already running) and books the
+   * entered minutes as a correction. Minutes are required: without them the
+   * server would round the few seconds of that timer up to a full block.
+   */
+  const entryMinutesValue = parseInt(entryMinutes, 10) || 0;
+  const canSaveEntry =
+    entryText.trim() !== '' &&
+    entryMinutesValue > 0 &&
+    isSaveStatusComplete(saveStatuses, entryStatus, entryAppointment);
+
   const handleSaveEntry = async () => {
-    if (!user || !entryText.trim()) return;
+    if (!user || !canSaveEntry) return;
+    const status = saveStatuses.find((s) => String(s.id) === entryStatus);
+    if (!status) return;
+
     setIsSavingEntry(true);
     try {
-      const minutes = parseInt(entryMinutes, 10) || 0;
-      if (minutes > 0) {
-        await apiClient.correctWatch({
-          ticket_id: ticket.id,
-          user_id: user.id,
-          old_time: 0,
-          new_time: minutes,
-        });
-      }
-
-      const response = await apiClient.saveTicketHistory({
-        ticket_id: ticket.id,
-        user_id: user.id,
-        verlauf_text: entryText,
-        status_id: parseInt(entryStatus, 10),
-        sendMail: 0,
+      await saveWorkEntry({
+        ticketId: ticket.id,
+        userId: user.id,
+        text: entryText,
+        statusId: status.id,
+        minutes: entryMinutesValue,
+        ...(status.requires_date && {
+          assigneeId: user.id,
+          appointment: toServerDateTime(new Date(entryAppointment)),
+        }),
       });
 
-      if (response.status === 'success') {
-        setEntryText('');
-        setEntryMinutes('');
-        toast.success('Eintrag gespeichert');
-        await fetchHistory();
-        await syncRefresh();
-      } else {
-        toast.error('Eintrag konnte nicht gespeichert werden', {
-          description: response.message,
-        });
-      }
+      setEntryText('');
+      setEntryMinutes('');
+      setEntryAppointment('');
+      toast.success('Eintrag gespeichert');
+      await fetchHistory();
+      await syncRefresh();
     } catch (error) {
       console.error('Failed to save history entry:', error);
-      toast.error('Eintrag konnte nicht gespeichert werden');
+      toast.error('Eintrag konnte nicht gespeichert werden', {
+        description: error instanceof WorkEntryError ? error.message : undefined,
+      });
     } finally {
       setIsSavingEntry(false);
     }
@@ -503,7 +507,7 @@ export function TicketDetail({
                     onKeyDown={(e) => {
                       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                         e.preventDefault();
-                        if (!isSavingEntry && entryText.trim()) void handleSaveEntry();
+                        if (!isSavingEntry && canSaveEntry) void handleSaveEntry();
                       }
                     }}
                     placeholder="Was wurde gemacht? (Strg+⏎ speichert)"
@@ -511,30 +515,22 @@ export function TicketDetail({
                     className="text-sm"
                   />
                   <div className="flex flex-wrap items-end gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                        Status
-                      </Label>
-                      <Select value={entryStatus} onValueChange={setEntryStatus}>
-                        <SelectTrigger className="h-8 w-[220px] text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {TICKET_STATUS_OPTIONS.map((option) => (
-                            <SelectItem key={option.id} value={option.id} className="text-xs">
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    <SaveStatusFields
+                      compact
+                      prefer="keep-open"
+                      statusId={entryStatus}
+                      onStatusChange={setEntryStatus}
+                      appointment={entryAppointment}
+                      onAppointmentChange={setEntryAppointment}
+                    />
                     <div className="space-y-1">
                       <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
                         Zeit (Min.)
                       </Label>
                       <Input
                         type="number"
-                        min="0"
+                        min="1"
+                        required
                         value={entryMinutes}
                         onChange={(e) => setEntryMinutes(e.target.value)}
                         placeholder="0"
@@ -543,7 +539,7 @@ export function TicketDetail({
                     </div>
                     <Button
                       onClick={handleSaveEntry}
-                      disabled={isSavingEntry || !entryText.trim()}
+                      disabled={isSavingEntry || !canSaveEntry}
                       size="sm"
                       className="ml-auto h-8 gap-1.5 text-xs"
                     >

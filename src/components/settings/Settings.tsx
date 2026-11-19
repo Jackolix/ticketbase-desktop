@@ -44,7 +44,7 @@ interface MailSettings {
 }
 
 export function Settings() {
-  const { user } = useAuth();
+  const { user, syncNewToken } = useAuth();
   const {
     currentVersion,
     availableUpdate,
@@ -110,8 +110,9 @@ export function Settings() {
     event.preventDefault();
     if (!user) return;
 
-    if (password.next.length < 6) {
-      toast.error('Das Passwort muss mindestens 6 Zeichen haben');
+    // The server's minimum (Fortify's default rule).
+    if (password.next.length < 8) {
+      toast.error('Das Passwort muss mindestens 8 Zeichen haben');
       return;
     }
     if (password.next !== password.confirm) {
@@ -123,6 +124,10 @@ export function Settings() {
     try {
       const response = await apiClient.changePassword(user.id, password.next);
       if (response.status === 'success') {
+        // The old token is now rejected; apiClient already stored the new one.
+        await syncNewToken().catch((error) => {
+          console.error('Failed to hand the new token to sync:', error);
+        });
         toast.success('Passwort geändert');
         setPassword({ next: '', confirm: '' });
       } else {

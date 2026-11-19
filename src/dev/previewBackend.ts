@@ -514,6 +514,17 @@ const HTTP_FIXTURES: Array<[RegExp, unknown | ((url: string) => unknown)]> = [
         : null,
     };
   }],
+  // The server's status catalog, as its migration seeds it.
+  [/getSaveStatuses/, {
+    status: 'success',
+    statuses: [
+      { id: 2, name: 'Zugewiesen', behavior: 'assigned', requires_date: false, requires_other_assignee: true, closes_ticket: false, color: null },
+      { id: 9, name: 'Terminiert', behavior: 'scheduled', requires_date: true, requires_other_assignee: false, closes_ticket: false, color: null },
+      { id: 5, name: 'Warte auf Rückmeldung (extern)', behavior: 'waiting', requires_date: false, requires_other_assignee: false, closes_ticket: false, color: null },
+      { id: 11, name: 'Ausstehend', behavior: 'waiting', requires_date: false, requires_other_assignee: false, closes_ticket: false, color: null },
+      { id: 4, name: 'Geschlossen', behavior: 'closed', requires_date: false, requires_other_assignee: false, closes_ticket: true, color: null },
+    ],
+  }],
   [/getTicketMessages/, { status: 'success', messages: [] }],
   [/getUsersMailSettings/, {
     status: 'success',

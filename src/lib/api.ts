@@ -8,7 +8,8 @@ import type {
   Location,
   TodoItem,
   TicketHistory,
-  PlayerStatus
+  PlayerStatus,
+  SaveStatus
 } from '@/types/api';
 import { fetch } from '@tauri-apps/plugin-http';
 
@@ -40,7 +41,12 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    
+
+    // Re-read on every request: changing the password replaces the token
+    // (the old one is rejected from then on), and every window has its own
+    // ApiClient but shares localStorage.
+    this.loadToken();
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -215,13 +221,29 @@ class ApiClient {
     });
   }
 
-  async stop(ticketId: number, userId: number): Promise<ApiResponse> {
+  /**
+   * Stops the timer. The server only acts on current_state 1 (PLAY) or
+   * 3 (RESUME); for anything else it returns an empty body, so callers must
+   * resume a paused timer first. See stopTimerForSave in workEntry.ts.
+   */
+  async stop(ticketId: number, userId: number, currentState: 1 | 3): Promise<ApiResponse> {
     return this.request<ApiResponse>('/stop', {
       method: 'POST',
       body: JSON.stringify({
         ticket_id: ticketId,
         user_id: userId,
+        current_state: currentState,
       }),
+    });
+  }
+
+  /**
+   * Statuses the server accepts when saving a work entry, in display order,
+   * with the rules each one carries.
+   */
+  async getSaveStatuses(): Promise<ApiResponse & { statuses?: SaveStatus[] }> {
+    return this.request<ApiResponse & { statuses?: SaveStatus[] }>('/getSaveStatuses', {
+      method: 'GET',
     });
   }
 
@@ -266,6 +288,7 @@ class ApiClient {
       });
 
       const url = `${this.baseUrl}/createTicket`;
+      this.loadToken();
       const headers: Record<string, string> = {
         'Accept': 'application/json',
       };
@@ -368,14 +391,28 @@ class ApiClient {
     });
   }
 
-  async changePassword(userId: number, newPassword: string): Promise<ApiResponse> {
-    return this.request<ApiResponse>('/changePassword', {
+  /**
+   * Changes the user's own password.
+   *
+   * The server invalidates every token issued before the change, including the
+   * one this request carried, and returns a fresh one in `authorisation` like
+   * login does. It is stored here; the caller must also hand it to the sync
+   * engine, which holds its own copy.
+   */
+  async changePassword(userId: number, newPassword: string): Promise<ApiResponse & { authorisation?: { token: string } }> {
+    const response = await this.request<ApiResponse & { authorisation?: { token: string } }>('/changePassword', {
       method: 'POST',
       body: JSON.stringify({
         user_id: userId,
         new_password: newPassword,
       }),
     });
+
+    if (response.status === 'success' && response.authorisation?.token) {
+      this.saveToken(response.authorisation.token);
+    }
+
+    return response;
   }
 
   // Mail Settings
@@ -427,6 +464,7 @@ class ApiClient {
   }
 
   async downloadAttachment(ticketId: number, filename: string): Promise<Blob> {
+    this.loadToken();
     const response = await fetch(`${this.baseUrl}/getDataUrl`, {
       method: 'POST',
       headers: {

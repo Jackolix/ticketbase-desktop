@@ -8,6 +8,11 @@ interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
+  /**
+   * Hands the sync engine the token apiClient now holds. Needed after a
+   * password change, which makes the server reject every older token.
+   */
+  syncNewToken: () => Promise<void>;
   isLoading: boolean;
   isAuthenticated: boolean;
 }
@@ -97,10 +102,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const syncNewToken = useCallback(async () => {
+    const token = localStorage.getItem('auth_token');
+    if (!user || !token) return;
+    // Not limited to the main window: this only replaces the credentials of
+    // the running engine, whichever window the password was changed in.
+    await syncStart(token, user);
+  }, [user]);
+
   const value: AuthContextType = {
     user,
     login,
     logout,
+    syncNewToken,
     isLoading,
     isAuthenticated: !!user && apiClient.isAuthenticated(),
   };

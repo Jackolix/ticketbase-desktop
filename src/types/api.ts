@@ -118,6 +118,20 @@ export interface PlayerStatus {
   ticket_status_id: number;
 }
 
+/** One entry of GET getSaveStatuses (the server's status catalog). */
+export interface SaveStatus {
+  id: number;
+  name: string;
+  /** new | in_progress | assigned | scheduled | waiting | closed | reopened | paused */
+  behavior: string;
+  /** "scheduled": the web requires an appointment date. */
+  requires_date: boolean;
+  /** "assigned": hands the ticket to another staff member. */
+  requires_other_assignee: boolean;
+  closes_ticket: boolean;
+  color: string | null;
+}
+
 export interface ApiResponse<T = any> {
   status: string;
   result?: string;
