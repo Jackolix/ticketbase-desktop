@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Building,
   Calendar,
+  CalendarClock,
   CheckCircle2,
   Circle,
   Clock,
@@ -49,6 +50,7 @@ import { TONE_BADGE, priorityLabel, priorityTone, statusTone } from '@/lib/ticke
 import { WindowManager } from '@/lib/windowManager';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
 import { ForwardTicketDialog } from './ForwardTicketDialog';
+import { ScheduleTicketDialog } from './TicketRowMenu';
 import { TemplateFields } from './TemplateFields';
 import { TicketFormView } from './TicketFormView';
 import { readTicketForm, visibleRows } from '@/lib/ticketForm';
@@ -108,6 +110,10 @@ export function TicketDetail({
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
   const [isForwardOpen, setIsForwardOpen] = useState(false);
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
+  // ticketTerminierenApi books the appointment for the signed-in user and only
+  // takes over a free ticket, so it is offered on free tickets and one's own.
+  const canSchedule = !!user && (ticket.my_ticket_id === 0 || ticket.my_ticket_id === user.id);
   // Controlled so the customer name in the sidebar can switch to the
   // related-tickets tab.
   const [activeTab, setActiveTab] = useState('history');
@@ -358,6 +364,17 @@ export function TicketDetail({
                 <UserPlus className="h-3.5 w-3.5" />
               )}
               Übernehmen
+            </Button>
+          )}
+          {canSchedule && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsScheduleOpen(true)}
+              className="h-8 gap-1.5"
+            >
+              <CalendarClock className="h-3.5 w-3.5" />
+              Terminieren
             </Button>
           )}
           {ticket.my_ticket_id !== 0 && (
@@ -798,6 +815,11 @@ export function TicketDetail({
         open={isForwardOpen}
         onOpenChange={setIsForwardOpen}
         onForwarded={() => void fetchHistory()}
+      />
+
+      <ScheduleTicketDialog
+        ticket={isScheduleOpen ? ticket : null}
+        onClose={() => setIsScheduleOpen(false)}
       />
 
       {previewFile && (

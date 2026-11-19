@@ -122,8 +122,6 @@ export function NewTicketForm({ onOpenTicket }: NewTicketFormProps) {
         setIsLoading(false);
       }
     })();
-    // selectCompany only sets state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Locations and templates follow the customer.

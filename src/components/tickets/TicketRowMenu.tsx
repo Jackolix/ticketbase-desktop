@@ -202,7 +202,9 @@ export function TicketRowMenu({
           Mir zuweisen
         </ContextMenuItem>
 
-        <ContextMenuItem disabled={!user} onSelect={onSchedule}>
+        {/* Books the appointment for you and only takes over a free ticket,
+            so like "Mir zuweisen" it is offered on free tickets and your own. */}
+        <ContextMenuItem disabled={!canClaim} onSelect={onSchedule}>
           <CalendarClock />
           Terminieren …
         </ContextMenuItem>
@@ -330,7 +332,8 @@ export function ScheduleTicketDialog({
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Das Ticket wird auf „Terminiert“ gesetzt und dir zugewiesen, falls es noch frei ist.
+          Der Termin wird für dich eingetragen; ein freies Ticket wird dir dabei zugewiesen.
+          Für einen Kollegen terminierst du über „Weiterleiten“.
         </p>
 
         <DialogFooter>

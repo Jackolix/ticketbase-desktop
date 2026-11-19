@@ -18,7 +18,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiClient } from '@/lib/api';
 import { forwardStatus, useSaveStatuses } from '@/lib/saveStatuses';
 import { syncRefresh } from '@/lib/sync';
-import { saveWorkEntry, WorkEntryError } from '@/lib/workEntry';
+import { saveWorkEntry, toServerDateTime, WorkEntryError } from '@/lib/workEntry';
 import type { Ticket, User } from '@/types/api';
 
 interface ForwardTicketDialogProps {
@@ -34,8 +34,9 @@ interface ForwardTicketDialogProps {
  *
  * There is no dedicated forward endpoint: forwarding is a work entry saved
  * with the "assigned" status from the server's catalog plus retermUserId. That
- * reassigns my_ticket_id, creates the appointment record (dated now) and sends
- * the colleague the "Weitergeleitet" mail. Like every work entry it goes
+ * reassigns my_ticket_id, creates the appointment record and sends the
+ * colleague the "Weitergeleitet" mail. The appointment is the date picked
+ * here, or now when none is (DECISIONS.md F22 on the server). Like every work entry it goes
  * through the timer and books time (see workEntry.ts), so the dialog asks for
  * the minutes; without them the server would round up to a full block.
  * Only the ticket's owner can forward: for anyone else the server saves a
@@ -62,6 +63,8 @@ export function ForwardTicketDialog({
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [note, setNote] = useState('');
   const [minutes, setMinutes] = useState('');
+  /** `datetime-local` value; empty means "from now". */
+  const [appointment, setAppointment] = useState('');
   const [isSending, setIsSending] = useState(false);
   const status = forwardStatus(useSaveStatuses());
   const minutesValue = parseInt(minutes, 10) || 0;
@@ -89,6 +92,7 @@ export function ForwardTicketDialog({
     setSelectedId(null);
     setNote('');
     setMinutes('');
+    setAppointment('');
     void loadColleagues();
   }, [open, loadColleagues]);
 
@@ -115,9 +119,14 @@ export function ForwardTicketDialog({
         statusId: status.id,
         minutes: minutesValue,
         assigneeId: selectedId,
+        ...(appointment && { appointment: toServerDateTime(new Date(appointment)) }),
       });
 
-      toast.success(`Ticket #${ticket.id} an ${target?.name ?? 'Kollegen'} weitergeleitet`);
+      toast.success(`Ticket #${ticket.id} an ${target?.name ?? 'Kollegen'} weitergeleitet`, {
+        description: appointment
+          ? `Termin: ${new Date(appointment).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}`
+          : undefined,
+      });
       onOpenChange(false);
       await syncRefresh();
       onForwarded?.();
@@ -218,20 +227,35 @@ export function ForwardTicketDialog({
             />
           </div>
 
-          <div className="space-y-1">
-            <Label htmlFor="forward-minutes" className="text-xs">
-              Gebuchte Zeit (Min.)
-            </Label>
-            <Input
-              id="forward-minutes"
-              type="number"
-              min="1"
-              required
-              value={minutes}
-              onChange={(e) => setMinutes(e.target.value)}
-              placeholder="z. B. 5"
-              className="h-8 w-[120px] text-xs"
-            />
+          <div className="flex flex-wrap gap-3">
+            <div className="space-y-1">
+              <Label htmlFor="forward-appointment" className="text-xs">
+                Termin <span className="font-normal text-muted-foreground">— optional, sonst ab sofort</span>
+              </Label>
+              <Input
+                id="forward-appointment"
+                type="datetime-local"
+                step={900}
+                value={appointment}
+                onChange={(e) => setAppointment(e.target.value)}
+                className="h-8 w-[200px] text-xs"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="forward-minutes" className="text-xs">
+                Gebuchte Zeit (Min.)
+              </Label>
+              <Input
+                id="forward-minutes"
+                type="number"
+                min="1"
+                required
+                value={minutes}
+                onChange={(e) => setMinutes(e.target.value)}
+                placeholder="z. B. 5"
+                className="h-8 w-[120px] text-xs"
+              />
+            </div>
           </div>
         </div>
 
