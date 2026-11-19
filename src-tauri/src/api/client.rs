@@ -348,6 +348,8 @@ fn parse_company_ticket(raw: &serde_json::Value, company: &Company) -> Option<Ti
 
         created_at: crate::datetime::to_display(&raw_str(raw, &["created_at"])),
         template_data: raw_str(raw, &["template_data"]),
+        // Only getTickets renders the form; template_data still carries the answers.
+        form: None,
     })
 }
 
@@ -424,6 +426,8 @@ pub fn parse_ticket_by_id(raw: &serde_json::Value) -> Option<Ticket> {
 
         created_at: raw_str(raw, &["created_at"]),
         template_data: raw_str(raw, &["template_data"]),
+        // Only getTickets renders the form; template_data still carries the answers.
+        form: None,
     })
 }
 

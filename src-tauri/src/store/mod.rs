@@ -144,6 +144,8 @@ impl Store {
         // Databases written before archiving existed have no such column, and
         // an install that upgrades in place must not lose its cache over it.
         add_column_if_missing(conn, "tickets", "archived", "INTEGER NOT NULL DEFAULT 0")?;
+        // The rendered template form (backend 2026-11), JSON or ''.
+        add_column_if_missing(conn, "tickets", "form", "TEXT NOT NULL DEFAULT ''")?;
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_tickets_archived ON tickets(archived);",
         )?;
@@ -619,11 +621,12 @@ const TICKET_COLUMNS: &str = "t.id, t.description, t.status, t.status_id, t.summ
      t.priority, t.priority_index, t.ticket_creator, t.ticket_user, t.ticket_user_phone, \
      t.ticket_terminated_user, t.pool_name, t.play_status, t.attachments, t.my_ticket_id, \
      t.location_id, t.dyn_template_id, t.company, t.created_at, t.ticket_start, \
-     t.ticket_messages_count, t.template_data";
+     t.ticket_messages_count, t.template_data, t.form";
 
 fn row_to_ticket(row: &rusqlite::Row) -> Result<Ticket, rusqlite::Error> {
     let attachments: String = row.get(14)?;
     let company: String = row.get(18)?;
+    let form: String = row.get(23)?;
 
     Ok(Ticket {
         id: row.get(0)?,
@@ -649,6 +652,7 @@ fn row_to_ticket(row: &rusqlite::Row) -> Result<Ticket, rusqlite::Error> {
         ticket_start: row.get(20)?,
         ticket_messages_count: row.get(21)?,
         template_data: row.get(22)?,
+        form: serde_json::from_str::<Option<serde_json::Value>>(&form).ok().flatten(),
     })
 }
 
@@ -711,10 +715,10 @@ fn upsert_ticket(
             ticket_creator, ticket_user, ticket_user_phone, ticket_terminated_user, pool_name,
             play_status, attachments, my_ticket_id, location_id, dyn_template_id,
             company, company_id, company_name, created_at, created_at_sortable, ticket_start,
-            ticket_messages_count, template_data, synced_at, archived
+            ticket_messages_count, template_data, synced_at, archived, form
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-            ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+            ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
         )
         ON CONFLICT(id) DO UPDATE SET
             description = excluded.description,
@@ -743,7 +747,10 @@ fn upsert_ticket(
             ticket_messages_count = excluded.ticket_messages_count,
             template_data = excluded.template_data,
             synced_at = excluded.synced_at,
-            archived = excluded.archived
+            archived = excluded.archived,
+            -- Only the ticket lists send the form; a single-ticket fetch must
+            -- not blank out one the last sync stored.
+            form = CASE WHEN excluded.form = '' THEN tickets.form ELSE excluded.form END
         "#,
         params![
             ticket.id,
@@ -774,6 +781,7 @@ fn upsert_ticket(
             ticket.template_data,
             synced_at,
             i64::from(archived),
+            ticket.form.as_ref().map(|form| form.to_string()).unwrap_or_default(),
         ],
     )?;
     Ok(())

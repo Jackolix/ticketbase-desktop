@@ -257,7 +257,7 @@ function AppContent() {
       case "tickets":
         return <TicketBoard onTicketSelect={handleTicketSelect} />;
       case "new-ticket":
-        return <NewTicketForm />;
+        return <NewTicketForm onOpenTicket={(id) => void loadTicketById(id)} />;
       case "settings":
         return <Settings />;
       case "today":

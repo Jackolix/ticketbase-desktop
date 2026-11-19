@@ -30,6 +30,7 @@ fn ticket(id: i64, summary: &str) -> Ticket {
         ticket_start: String::new(),
         ticket_messages_count: 2,
         template_data: String::new(),
+        form: None,
     }
 }
 
@@ -774,4 +775,23 @@ fn a_timer_outlives_the_sync_purge() {
     store.replace_all(&[], &[], &[], 2).unwrap();
 
     assert!(store.timer(4812, 17, T0 + MINUTE).unwrap().is_some());
+}
+
+#[test]
+fn the_template_form_survives_a_round_trip_and_a_single_ticket_fetch() {
+    let store = Store::open_in_memory().unwrap();
+    let form = serde_json::json!({
+        "source": "v2",
+        "rows": [{ "kind": "field", "label": "Gerät", "type": "text", "values": ["NB-12"] }],
+    });
+    let with_form = Ticket {
+        form: Some(form.clone()),
+        ..ticket(1, "offen")
+    };
+    store.replace_all(&[], &[with_form], &[], 1).unwrap();
+    assert_eq!(store.get_ticket(1).unwrap().unwrap().form, Some(form.clone()));
+
+    // getTicketById does not render the form; its copy must not erase it.
+    store.put_ticket(&ticket(1, "offen"), 2, false).unwrap();
+    assert_eq!(store.get_ticket(1).unwrap().unwrap().form, Some(form));
 }

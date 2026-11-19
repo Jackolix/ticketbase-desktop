@@ -12,6 +12,35 @@ import type {
   SaveStatus
 } from '@/types/api';
 import { fetch } from '@tauri-apps/plugin-http';
+import { hasFiles, type FormAnswers } from '@/lib/formSchema';
+
+export interface CreateTicketInput {
+  description: string;
+  priority: 'NORMAL' | 'HIGH' | 'VERY_HIGH';
+  company_id: number;
+  location_id: number;
+  for_user_id: number;
+  /** Short title; the server falls back to the description. */
+  summary?: string;
+  dyn_template_id?: number;
+  /** Answers to the template's form, by field key. */
+  form_answers?: FormAnswers;
+  attachment?: File;
+}
+
+/** What createTicket returns about the new ticket (HTTP 201). */
+export interface CreatedTicket {
+  id: number;
+  status_id: number;
+  created_at: string;
+}
+
+/** A 422 from createTicket: `errors` maps a field (or `form_answers.f_…`) to messages. */
+export class TicketValidationError extends Error {
+  constructor(message: string, readonly errors: Record<string, string[]>) {
+    super(message);
+  }
+}
 
 class ApiClient {
   private baseUrl: string;
@@ -258,102 +287,77 @@ class ApiClient {
   }
 
   // Ticket Management
-  async createTicket(data: {
-    user_id: number;
-    description: string;
-    priority: string;
-    company_id: number;
-    location_id: number;
-    for_user_id: number;
-    dyn_template_id?: number;
-    attachments?: File[];
-  }): Promise<ApiResponse> {
-    // If there are attachments, use FormData
-    if (data.attachments && data.attachments.length > 0) {
-      const formData = new FormData();
-      formData.append('user_id', data.user_id.toString());
-      formData.append('description', data.description);
-      formData.append('priority', data.priority);
-      formData.append('company_id', data.company_id.toString());
-      formData.append('location_id', data.location_id.toString());
-      formData.append('for_user_id', data.for_user_id.toString());
-      
-      if (data.dyn_template_id) {
-        formData.append('dyn_template_id', data.dyn_template_id.toString());
-      }
-      
-      // Append all files with the same key 'ticket_image'
-      data.attachments.forEach((file) => {
-        formData.append('ticket_image', file);
-      });
+  /**
+   * Creates a ticket (POST createTicket, INTEGRATIONS.md §4.2).
+   *
+   * The creator is always the signed-in user. Location and recipient must
+   * belong to the customer, and a template must be enabled for it; the server
+   * answers 422 with per-field `errors` otherwise, thrown here as
+   * TicketValidationError. With a template that has a form, `form_answers`
+   * carries the answers; files among them, or an attachment, make this a
+   * multipart request.
+   */
+  async createTicket(input: CreateTicketInput): Promise<CreatedTicket | null> {
+    const answers = input.form_answers;
+    const multipart = Boolean(input.attachment) || (answers ? hasFiles(answers) : false);
 
-      const url = `${this.baseUrl}/createTicket`;
-      this.loadToken();
-      const headers: Record<string, string> = {
-        'Accept': 'application/json',
-      };
-
-      if (this.token) {
-        headers.Authorization = `Bearer ${this.token}`;
-      }
-
-      console.log('Creating ticket with FormData and', data.attachments.length, 'attachment(s)');
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: formData,
-      });
-
-      if (!response.ok) {
-        let errorText = '';
-        try {
-          errorText = await response.text();
-          console.error('Server error response:', errorText);
-          console.error('Response headers:', Object.fromEntries(response.headers.entries()));
-        } catch {
-          console.error('Could not read error response');
-        }
-        throw new Error(`HTTP error! status: ${response.status} - ${errorText.substring(0, 200)}`);
-      }
-
-      return response.json();
-    }
-
-    // Otherwise use JSON - ensure all numeric fields are numbers
-    const payload: any = {
-      user_id: Number(data.user_id),
-      description: data.description,
-      priority: data.priority,
-      company_id: Number(data.company_id),
-      location_id: Number(data.location_id),
-      for_user_id: Number(data.for_user_id),
+    const fields: Record<string, string | number | undefined> = {
+      description: input.description,
+      priority: input.priority,
+      company_id: input.company_id,
+      location_id: input.location_id,
+      for_user_id: input.for_user_id,
+      summary: input.summary?.trim() || undefined,
+      dyn_template_id: input.dyn_template_id,
     };
 
-    if (data.dyn_template_id) {
-      payload.dyn_template_id = Number(data.dyn_template_id);
+    let body: BodyInit;
+    const headers: Record<string, string> = { Accept: 'application/json' };
+
+    if (multipart) {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) {
+        if (value !== undefined) form.append(key, String(value));
+      }
+      for (const [key, value] of Object.entries(answers ?? {})) {
+        if (value instanceof File) form.append(`form_answers[${key}]`, value);
+        else if (Array.isArray(value)) value.forEach((v) => form.append(`form_answers[${key}][]`, v));
+        else if (value !== null) form.append(`form_answers[${key}]`, value);
+      }
+      // A single file: createTicketMobile reads `ticket_image` as one upload,
+      // so `ticket_image[]` would break server-side.
+      if (input.attachment) form.append('ticket_image', input.attachment);
+      body = form;
+    } else {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify({ ...fields, ...(answers && { form_answers: answers }) });
     }
 
-    console.log('Creating ticket without attachments:', payload);
-    console.log('Request URL:', `${this.baseUrl}/createTicket`);
-    console.log('Authorization token present:', !!this.token);
-    
-    try {
-      const response = await this.request<ApiResponse>('/createTicket', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      console.log('✅ Ticket creation SUCCESS:', response);
-      return response;
-    } catch (error) {
-      console.error('❌ Error creating ticket:', error);
-      // Try to get more details from the error
-      if (error instanceof Error) {
-        console.error('Error message:', error.message);
-        console.error('Error stack:', error.stack);
-      }
-      throw error;
+    this.loadToken();
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+
+    const response = await fetch(`${this.baseUrl}/createTicket`, { method: 'POST', headers, body });
+    const payload = (await response.json().catch(() => null)) as {
+      status?: string;
+      message?: string;
+      errors?: Record<string, string[]>;
+      ticket?: CreatedTicket;
+    } | null;
+
+    if (response.status === 422) {
+      throw new TicketValidationError(
+        payload?.message || 'Bitte die markierten Angaben prüfen.',
+        payload?.errors ?? {},
+      );
     }
+    if (!response.ok || payload?.status !== 'success') {
+      throw new Error(
+        payload?.message || `Das Ticket konnte nicht angelegt werden (HTTP ${response.status}).`,
+      );
+    }
+
+    // Servers before the 2026-11 release answer without the new ticket.
+    return payload.ticket ?? null;
   }
 
   async ticketTerminieren(ticketId: number, userId: number, date: string): Promise<ApiResponse> {

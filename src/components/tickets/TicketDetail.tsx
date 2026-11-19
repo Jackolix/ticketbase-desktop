@@ -50,6 +50,8 @@ import { WindowManager } from '@/lib/windowManager';
 import { Ticket, TicketHistory, TodoItem } from '@/types/api';
 import { ForwardTicketDialog } from './ForwardTicketDialog';
 import { TemplateFields } from './TemplateFields';
+import { TicketFormView } from './TicketFormView';
+import { readTicketForm, visibleRows } from '@/lib/ticketForm';
 import { TicketMessages } from './TicketMessages';
 import { TicketPlayerControls } from './TicketPlayerControls';
 
@@ -115,9 +117,14 @@ export function TicketDetail({
   // its own Escape, and while typing a work entry.
   useHotkey('escape', onBack);
 
+  // The server-rendered form when the sync has one; template_data otherwise
+  // (tickets fetched one at a time, servers before the 2026-11 release).
+  const ticketForm = readTicketForm(ticket.form);
+  const hasFormRows = ticketForm !== null && visibleRows(ticketForm).rows.length > 0;
   const templateFields = parseTemplateData(ticket.template_data, {
     omitValues: [ticket.description],
   });
+  const hasTemplateContent = hasFormRows || templateFields.length > 0;
   const hasDescription = Boolean(ticket.description?.trim());
 
   const fetchHistory = useCallback(async () => {
@@ -391,7 +398,7 @@ export function TicketDetail({
             <div className="flex items-center gap-1.5 border-b px-3 py-2">
               <FileText className="h-3.5 w-3.5 text-muted-foreground" />
               <h2 className="text-xs font-semibold uppercase tracking-wide">
-                {templateFields.length > 0 && !hasDescription ? 'Formular' : 'Beschreibung'}
+                {hasTemplateContent && !hasDescription ? 'Formular' : 'Beschreibung'}
               </h2>
             </div>
             <CardContent className="space-y-4 p-3">
@@ -401,14 +408,18 @@ export function TicketDetail({
                 </p>
               )}
 
-              {templateFields.length > 0 && (
+              {hasTemplateContent && (
                 <>
                   {hasDescription && <div className="border-t pt-3" />}
-                  <TemplateFields templateData={ticket.template_data} omitValues={[ticket.description]} />
+                  {hasFormRows ? (
+                    <TicketFormView form={ticketForm} />
+                  ) : (
+                    <TemplateFields templateData={ticket.template_data} omitValues={[ticket.description]} />
+                  )}
                 </>
               )}
 
-              {!hasDescription && templateFields.length === 0 && (
+              {!hasDescription && !hasTemplateContent && (
                 <p className="text-sm italic text-muted-foreground">
                   Keine Beschreibung vorhanden
                 </p>

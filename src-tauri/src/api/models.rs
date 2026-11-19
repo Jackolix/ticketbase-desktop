@@ -199,6 +199,12 @@ pub struct Ticket {
 
     #[serde(default, deserialize_with = "flexible_string")]
     pub template_data: String,
+
+    /// The ticket's template form as the web shows it: labelled rows with all
+    /// their values (backend 2026-11, INTEGRATIONS.md §4.4). Only the ticket
+    /// lists send it; passed through untouched for the frontend to read.
+    #[serde(default)]
+    pub form: Option<serde_json::Value>,
 }
 
 /// Which list a ticket appeared in. The backend buckets these server-side and
@@ -454,7 +460,7 @@ mod tests {
             "index", "my_ticket_id", "location_id", "dyn_template_id", "company",
             "created_at", "ticket_start", "template_data", "attachments", "pool_name",
             "ticketCreator", "ticketUser", "ticketUserPhone", "ticketTerminatedUser",
-            "playStatus", "ticketMessagesCount",
+            "playStatus", "ticketMessagesCount", "form",
         ];
 
         for key in expected {

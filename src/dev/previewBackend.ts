@@ -100,6 +100,24 @@ function makeTicket(i: number) {
     created_at: backendDate(i % 20, 8 + (i % 9), (i * 7) % 60),
     ticket_start: scheduledToday ? backendDate(0, 8 + (i % 9), 0) : '',
     ticketMessagesCount: i % 6 === 0 ? 2 : 0,
+    // The server-rendered form (backend 2026-11) on some template tickets.
+    form:
+      i % 6 === 1
+        ? {
+            source: 'v2',
+            template_changed: i % 12 === 7,
+            field_count: 6,
+            answered_count: 4,
+            rows: [
+              { kind: 'field', label: 'Welches Gerät?', type: 'select', values: ['Drucker'], files: [], answered: true },
+              { kind: 'field', label: 'Inventarnummer', type: 'text', values: [], files: [], answered: false },
+              { kind: 'section', label: 'Drucker', type: 'section', values: [], files: [], answered: false },
+              { kind: 'field', label: 'Druckermodell', type: 'text', values: ['HP LaserJet M404'], files: [], answered: true },
+              { kind: 'field', label: 'Was passiert?', type: 'checkbox', values: ['Papierstau', 'Offline'], files: [], answered: true },
+              { kind: 'field', label: 'Foto', type: 'file', values: [], files: ['fehler.jpg'], answered: true },
+            ],
+          }
+        : null,
     // Every third ticket carries a template, so the detail page's form
     // rendering is exercised in the preview.
     template_data:
@@ -144,6 +162,38 @@ const TICKET_COUNT = Math.min(
 );
 
 const TICKETS = Array.from({ length: TICKET_COUNT }, (_, i) => makeTicket(i));
+
+/**
+ * Templates with a form (schema v2), so the new-ticket form can be reviewed:
+ * sections, half-width fields, every input type, and fields that only show
+ * for a particular answer.
+ */
+const PREVIEW_TEMPLATES = [
+  {
+    id: 1,
+    name: 'Hardware-Störung',
+    form_schema: {
+      version: 2,
+      layout: 'sections',
+      fields: [
+        { key: 'f_device', type: 'select', label: 'Welches Gerät?', required: true, width: 'half',
+          options: [{ key: 'o_nb', label: 'Notebook' }, { key: 'o_pc', label: 'PC' }, { key: 'o_printer', label: 'Drucker' }] },
+        { key: 'f_inventory', type: 'text', label: 'Inventarnummer', placeholder: 'z. B. NB-12', help: 'Steht auf dem Aufkleber', width: 'half' },
+        { key: 's_printer', type: 'section', label: 'Drucker',
+          visibility: { match: 'all', conditions: [{ field: 'f_device', operator: 'equals', option: 'o_printer' }] } },
+        { key: 'f_printer_model', type: 'text', label: 'Druckermodell', required: true, parent: 's_printer', width: 'half' },
+        { key: 'f_printer_issue', type: 'checkbox', label: 'Was passiert?', parent: 's_printer',
+          options: [{ key: 'o_jam', label: 'Papierstau' }, { key: 'o_offline', label: 'Offline' }, { key: 'o_quality', label: 'Druckbild' }] },
+        { key: 'f_since', type: 'date', label: 'Seit wann?', width: 'half' },
+        { key: 'f_urgent', type: 'radio', label: 'Kann weitergearbeitet werden?', width: 'half',
+          options: [{ key: 'o_yes', label: 'Ja' }, { key: 'o_no', label: 'Nein' }] },
+        { key: 'p_hint', type: 'paragraph', label: 'Bitte ein Foto der Fehlermeldung anhängen, falls vorhanden.' },
+        { key: 'f_photo', type: 'file', label: 'Foto' },
+      ],
+    },
+  },
+  { id: 2, name: 'Standard', form_schema: { version: 2, fields: [] } },
+];
 
 const MINE = TICKETS.filter((t) => t.my_ticket_id !== 0);
 const POOL = TICKETS.filter((t) => t.my_ticket_id === 0);
@@ -549,7 +599,19 @@ const HTTP_FIXTURES: Array<[RegExp, unknown | ((url: string) => unknown)]> = [
     ],
   }],
   [/getCustomers/, { status: 'success', customers: COMPANIES }],
-  [/getTemplates/, { status: 'success', templates: [{ id: 1, name: 'Standard' }] }],
+  [/getTemplates/, { status: 'success', templates: PREVIEW_TEMPLATES }],
+  [/getCustomerLocations/, {
+    status: 'success',
+    locations: [
+      { id: 42, name: 'Zentrale', company_id: 8 },
+      { id: 43, name: 'Lager Hürth', company_id: 8 },
+    ],
+  }],
+  [/createTicket/, () => ({
+    status: 'success',
+    message: 'Ticket successfully created',
+    ticket: { id: 4800, status_id: 1, created_at: new Date().toISOString() },
+  })],
   [/getWikiData/, {
     status: 'success',
     wikiData: [

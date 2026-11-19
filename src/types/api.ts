@@ -68,6 +68,8 @@ export interface Ticket {
   ticket_start: string;
   ticketMessagesCount: number;
   template_data: string;
+  /** Server-rendered template form; read it with readTicketForm. */
+  form?: unknown;
   pool_name: string;
 }
 
@@ -144,6 +146,10 @@ export interface ApiResponse<T = any> {
   /** getUserStatus and changeUserStatus return this at the top level, not under data. */
   activity?: UserStatus;
   users?: User[];
+  /** getTemplates, getCustomerLocations, getCustomers answer at the top level, not under data. */
+  templates?: Template[];
+  locations?: Location[];
+  customers?: Company[];
   messages?: any[];
   todayTickets?: any[];
   wikiData?: any[];
@@ -157,6 +163,11 @@ export interface UserStatus {
 export interface Template {
   id: number;
   name: string;
+  /**
+   * The template's form (schema v2), raw as the server sends it; read it
+   * with parseFormSchema. Absent on servers before the 2026-11 release.
+   */
+  form_schema?: unknown;
 }
 
 export interface Location {

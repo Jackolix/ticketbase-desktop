@@ -1,0 +1,88 @@
+{
+    "_comment": "Shared cases for the visibility evaluation in PHP (tests/Unit/FormVisibilityTest.php) and JS (tests/js/form-visibility.test.mjs). `config` must equal FormVisibility::clientConfig() of `schema`; `hidden` lists the hidden element keys, sorted.",
+    "schema": {
+        "version": 2,
+        "layout": "sections",
+        "fields": [
+            {"key": "f_form", "type": "select", "label": "Welche Unternehmensform liegt vor?", "options": [{"key": "o_ez", "label": "Einzelunternehmen"}, {"key": "o_gmbh", "label": "GmbH"}, {"key": "o_kg", "label": "GmbH & Co. KG"}, {"key": "o_other", "label": "Sonstige"}]},
+            {"key": "s_gmbh", "type": "section", "label": "Angaben zur GmbH", "visibility": {"match": "any", "conditions": [{"field": "f_form", "operator": "equals", "option": "o_gmbh"}, {"field": "f_form", "operator": "equals", "option": "o_kg"}]}},
+            {"key": "f_hrb", "type": "text", "label": "Handelsregisternummer", "required": true, "parent": "s_gmbh"},
+            {"key": "f_more", "type": "radio", "label": "Weitere Geschäftsführer vorhanden?", "parent": "s_gmbh", "options": [{"key": "o_yes", "label": "Ja"}, {"key": "o_no", "label": "Nein"}]},
+            {"key": "s_extra", "type": "section", "label": "Zusätzliche Geschäftsführer", "visibility": {"match": "all", "conditions": [{"field": "f_form", "operator": "equals", "option": "o_gmbh"}, {"field": "f_more", "operator": "equals", "option": "o_yes"}]}},
+            {"key": "f_extra_names", "type": "textarea", "label": "Namen", "required": true, "parent": "s_extra"},
+            {"key": "f_alt", "type": "checkbox", "label": "Abweichende Rechnungsadresse verwenden?", "options": [{"key": "o_alt_yes", "label": "Ja"}]},
+            {"key": "f_alt_address", "type": "textarea", "label": "Abweichende Rechnungsadresse", "required": true, "visibility": {"match": "all", "conditions": [{"field": "f_alt", "operator": "contains", "option": "o_alt_yes"}]}},
+            {"key": "f_devices", "type": "checkbox", "label": "Geräte", "options": [{"key": "o_pc", "label": "PC"}, {"key": "o_printer", "label": "Drucker"}]},
+            {"key": "f_printer_model", "type": "text", "label": "Druckermodell", "visibility": {"match": "any", "conditions": [{"field": "f_devices", "operator": "contains", "option": "o_printer"}]}},
+            {"key": "f_no_device", "type": "paragraph", "label": "Kein Gerät gewählt", "visibility": {"match": "all", "conditions": [{"field": "f_devices", "operator": "is_not_set"}]}},
+            {"key": "f_not_ez", "type": "text", "label": "Nicht für Einzelunternehmen", "visibility": {"match": "all", "conditions": [{"field": "f_form", "operator": "not_equals", "option": "o_ez"}]}},
+            {"key": "f_nested", "type": "text", "label": "Verschachtelt", "visibility": {"match": "all", "conditions": [{"field": "f_alt", "operator": "is_set"}, {"match": "any", "conditions": [{"field": "f_devices", "operator": "contains", "option": "o_pc"}, {"field": "f_form", "operator": "equals", "option": "o_kg"}]}]}},
+            {"key": "f_lvl1", "type": "radio", "label": "Stufe 1", "options": [{"key": "o_y", "label": "Ja"}]},
+            {"key": "f_lvl2", "type": "radio", "label": "Stufe 2", "options": [{"key": "o_y2", "label": "Ja"}], "visibility": {"match": "all", "conditions": [{"field": "f_lvl1", "operator": "equals", "option": "o_y"}]}},
+            {"key": "f_lvl3", "type": "text", "label": "Stufe 3", "visibility": {"match": "all", "conditions": [{"field": "f_lvl2", "operator": "equals", "option": "o_y2"}]}},
+            {"key": "f_broken", "type": "text", "label": "Toter Verweis", "visibility": {"match": "all", "conditions": [{"field": "f_deleted", "operator": "equals", "option": "o_x"}, {"field": "f_form", "operator": "equals", "option": "o_missing"}]}},
+            {"key": "f_c1", "type": "select", "label": "Zyklus 1", "options": [{"key": "o_a", "label": "A"}], "visibility": {"match": "all", "conditions": [{"field": "f_c2", "operator": "is_set"}]}},
+            {"key": "f_c2", "type": "select", "label": "Zyklus 2", "options": [{"key": "o_b", "label": "B"}], "visibility": {"match": "all", "conditions": [{"field": "f_c1", "operator": "is_set"}]}},
+            {"key": "f_partly", "type": "text", "label": "Teilweise ungültig", "visibility": {"match": "any", "conditions": [{"field": "f_form", "operator": "equals", "option": "o_gone"}, {"field": "f_alt", "operator": "contains", "option": "o_alt_yes"}]}}
+        ]
+    },
+    "config": {
+        "elements": {
+            "s_gmbh": {"parent": null, "rule": {"match": "any", "conditions": [{"field": "f_form", "operator": "equals", "option": "o_gmbh"}, {"field": "f_form", "operator": "equals", "option": "o_kg"}]}},
+            "f_hrb": {"parent": "s_gmbh", "rule": null},
+            "f_more": {"parent": "s_gmbh", "rule": null},
+            "s_extra": {"parent": null, "rule": {"match": "all", "conditions": [{"field": "f_form", "operator": "equals", "option": "o_gmbh"}, {"field": "f_more", "operator": "equals", "option": "o_yes"}]}},
+            "f_extra_names": {"parent": "s_extra", "rule": null},
+            "f_alt_address": {"parent": null, "rule": {"match": "all", "conditions": [{"field": "f_alt", "operator": "contains", "option": "o_alt_yes"}]}},
+            "f_printer_model": {"parent": null, "rule": {"match": "any", "conditions": [{"field": "f_devices", "operator": "contains", "option": "o_printer"}]}},
+            "f_no_device": {"parent": null, "rule": {"match": "all", "conditions": [{"field": "f_devices", "operator": "is_not_set", "option": null}]}},
+            "f_not_ez": {"parent": null, "rule": {"match": "all", "conditions": [{"field": "f_form", "operator": "not_equals", "option": "o_ez"}]}},
+            "f_nested": {"parent": null, "rule": {"match": "all", "conditions": [{"field": "f_alt", "operator": "is_set", "option": null}, {"match": "any", "conditions": [{"field": "f_devices", "operator": "contains", "option": "o_pc"}, {"field": "f_form", "operator": "equals", "option": "o_kg"}]}]}},
+            "f_lvl2": {"parent": null, "rule": {"match": "all", "conditions": [{"field": "f_lvl1", "operator": "equals", "option": "o_y"}]}},
+            "f_lvl3": {"parent": null, "rule": {"match": "all", "conditions": [{"field": "f_lvl2", "operator": "equals", "option": "o_y2"}]}},
+            "f_partly": {"parent": null, "rule": {"match": "any", "conditions": [{"field": "f_alt", "operator": "contains", "option": "o_alt_yes"}]}}
+        }
+    },
+    "cases": [
+        {
+            "name": "leeres Formular",
+            "answers": {},
+            "hidden": ["f_alt_address", "f_extra_names", "f_hrb", "f_lvl2", "f_lvl3", "f_more", "f_nested", "f_partly", "f_printer_model", "s_extra", "s_gmbh"]
+        },
+        {
+            "name": "GmbH mit weiteren Geschäftsführern (UND)",
+            "answers": {"f_form": "o_gmbh", "f_more": "o_yes"},
+            "hidden": ["f_alt_address", "f_lvl2", "f_lvl3", "f_nested", "f_partly", "f_printer_model"]
+        },
+        {
+            "name": "GmbH & Co. KG zeigt den GmbH-Abschnitt (ODER), aber nicht die zusätzlichen Geschäftsführer",
+            "answers": {"f_form": "o_kg", "f_more": "o_yes"},
+            "hidden": ["f_alt_address", "f_extra_names", "f_lvl2", "f_lvl3", "f_nested", "f_partly", "f_printer_model", "s_extra"]
+        },
+        {
+            "name": "Einzelunternehmen: ausgeblendeter Abschnitt blendet seine Felder aus, auch mit Werten",
+            "answers": {"f_form": "o_ez", "f_more": "o_yes", "f_hrb": "HRB 1"},
+            "hidden": ["f_alt_address", "f_extra_names", "f_hrb", "f_lvl2", "f_lvl3", "f_more", "f_nested", "f_not_ez", "f_partly", "f_printer_model", "s_extra", "s_gmbh"]
+        },
+        {
+            "name": "Checkbox steuert Textfeld, Mehrfachauswahl steuert Feld und verschachtelte Gruppe",
+            "answers": {"f_alt": ["o_alt_yes"], "f_devices": ["o_pc", "o_printer"]},
+            "hidden": ["f_extra_names", "f_hrb", "f_lvl2", "f_lvl3", "f_more", "f_no_device", "s_extra", "s_gmbh"]
+        },
+        {
+            "name": "Verschachtelte Gruppe über den ODER-Zweig",
+            "answers": {"f_alt": ["o_alt_yes"], "f_devices": [], "f_form": "o_kg"},
+            "hidden": ["f_extra_names", "f_lvl2", "f_lvl3", "f_printer_model", "s_extra"]
+        },
+        {
+            "name": "Kette über drei Stufen",
+            "answers": {"f_lvl1": "o_y", "f_lvl2": "o_y2"},
+            "hidden": ["f_alt_address", "f_extra_names", "f_hrb", "f_more", "f_nested", "f_partly", "f_printer_model", "s_extra", "s_gmbh"]
+        },
+        {
+            "name": "Kette unterbrochen: ausgeblendeter Auslöser zählt als leer",
+            "answers": {"f_lvl1": null, "f_lvl2": "o_y2"},
+            "hidden": ["f_alt_address", "f_extra_names", "f_hrb", "f_lvl2", "f_lvl3", "f_more", "f_nested", "f_partly", "f_printer_model", "s_extra", "s_gmbh"]
+        }
+    ]
+}
