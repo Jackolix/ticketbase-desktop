@@ -11,7 +11,7 @@ export default defineConfig({
     // Pure-function tests only for now. Component tests arrive with Phase 04 and
     // will need the jsdom environment plus @testing-library/react.
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.js'],
     coverage: {
       provider: 'v8',
       include: ['src/lib/**', 'src/utils/**'],
